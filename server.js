@@ -1,7 +1,8 @@
 /**
- * Mini 1:1 Chat — single-file Node.js + Socket.IO app
- * UI: KakaoTalk-like styling (yellow my-bubbles, white others, header bar, sticky input)
- * Note: No nested backticks in client JS inside the server template string.
+ * Mini 1:1 Chat — Node.js + Socket.IO
+ * UI: Cloud Cat theme (inspired by the user's CloudCatChat.tsx)
+ * - Sky gradient, cloud header, white vs sky bubbles, emoji picker, sticky input bar
+ * - No nested backticks in client JS (safe for server template string)
  */
 const express = require('express');
 const http = require('http');
@@ -34,7 +35,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = "v-2025-09-21-04";
+const APP_VERSION = "v-2025-09-21-05";
 
 app.get('/', (req, res) => {
   const { room = '', nick = '' } = req.query;
@@ -44,88 +45,116 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>1:1 Private Chat</title>
+  <title>Cloud Cat Chat</title>
   <style>
-    :root{ --kakao-yellow:#FEE500; --kakao-bg:#EDEDED; --ink:#111827; --muted:#8B95A1; --bubble:#fff; --me:#111; --them:#111; --header-h:56px; }
+    :root{
+      --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc; --sky-400:#38bdf8;
+      --sky-500:#0ea5e9; --ink:#0f172a; --muted:#64748b; --white:#ffffff; --bg:#e6f1fb;
+      --header-h:58px;
+    }
     *{box-sizing:border-box}
     html,body{height:100%}
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;background:var(--kakao-bg);color:#111}
-    .wrap{max-width:680px;margin:0 auto;padding:0 0 12px;min-height:100%;}
-    .card{display:flex;flex-direction:column;min-height:100vh;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.06)}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;background:linear-gradient(180deg,var(--sky-100),var(--white));color:var(--ink)}
+    .wrap{max-width:720px;margin:0 auto;min-height:100%;padding:0 12px}
+    .card{min-height:100vh;background:rgba(255,255,255,.85);backdrop-filter:blur(6px);border:1px solid rgba(14,165,233,.12);border-radius:24px;box-shadow:0 12px 40px rgba(2,6,23,.08);overflow:hidden;display:flex;flex-direction:column}
 
-    /* Header (app bar) */
-    .appbar{height:var(--header-h);display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--kakao-yellow);border-bottom:1px solid rgba(0,0,0,.08);position:sticky;top:0;z-index:10}
-    .appbar .title{font-weight:700}
-    .appbar .room{font-size:12px;color:#333}
+    /* Header */
+    .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(255,255,255,.9);border-bottom:1px solid rgba(14,165,233,.18)}
+    .brand{display:flex;gap:10px;align-items:center}
+    .cat{width:36px;height:36px;border-radius:999px;background:var(--sky-200);display:flex;align-items:center;justify-content:center}
+    .title{font-weight:800;color:var(--sky-600, #0284c7)}
+    .subtitle{font-size:12px;color:var(--muted);font-family:ui-serif, Georgia, serif}
+    .status{display:flex;gap:6px;align-items:center;color:var(--sky-600,#0284c7);font-size:12px;font-family:ui-serif, Georgia, serif}
 
     /* Chat area */
-    .chat{flex:1;overflow:auto;background:var(--kakao-bg);padding:12px 12px 90px 12px}
-    .sys{color:#6b7280;text-align:center;font-size:12px;margin:10px 0}
+    .chat{flex:1;overflow:auto;background:linear-gradient(180deg,var(--sky-50),var(--white));padding:14px 14px 110px 14px}
+    .divider{display:flex;align-items:center;gap:8px;margin:8px 0}
+    .divider .line{height:1px;background:rgba(14,165,233,.35);flex:1}
+    .divider .txt{font-size:12px;color:#0ea5e9;font-family:ui-serif, Georgia, serif}
 
     /* Message row */
-    .msg{display:flex;gap:8px;margin:6px 0;align-items:flex-end}
+    .msg{display:flex;gap:8px;margin:8px 0;align-items:flex-end}
     .msg.me{justify-content:flex-end}
-    .avatar{width:32px;height:32px;border-radius:50%;background:#d9d9d9;color:#222;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+    .avatar{width:32px;height:32px;border-radius:50%;background:var(--sky-200);display:flex;align-items:center;justify-content:center;font-size:13px}
     .msg.me .avatar{display:none}
 
-    /* Bubble */
-    .bubble{max-width:75%;padding:8px 10px;border-radius:14px;line-height:1.35;position:relative;word-break:break-word}
-    .name{font-size:12px;color:#666;margin-bottom:2px}
-    .meta{font-size:11px;color:#888;margin-top:4px;text-align:right}
+    .bubble{max-width:76%;padding:10px 12px;border-radius:18px;line-height:1.45;word-break:break-word}
+    .meta{font-size:10px;margin-top:4px;font-family:ui-serif, Georgia, serif}
 
-    /* Others = white bubble */
-    .them .bubble{background:var(--bubble);border:1px solid #e5e7eb}
-    .them .bubble:after{content:"";position:absolute;left:-6px;bottom:8px;border:6px solid transparent;border-right-color:#e5e7eb}
-    .them .bubble:before{content:"";position:absolute;left:-5px;bottom:8px;border:6px solid transparent;border-right-color:#fff}
+    .them .bubble{background:var(--white);border:1px solid var(--sky-200);color:#075985}
+    .them .meta{color:#38bdf8}
 
-    /* Me = yellow bubble */
-    .me .bubble{background:var(--kakao-yellow);color:#000}
-    .me .bubble:after{content:"";position:absolute;right:-6px;bottom:8px;border:6px solid transparent;border-left-color:#c9b200}
-    .me .bubble:before{content:"";position:absolute;right:-5px;bottom:8px;border:6px solid transparent;border-left-color:var(--kakao-yellow)}
+    .me .bubble{background:var(--sky-400);color:#fff;box-shadow:0 4px 18px rgba(56,189,248,.35)}
+    .me .meta{color:#dbeafe}
 
-    /* Input bar */
-    .inputbar{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:680px;background:#fff;border-top:1px solid #eee;padding:10px;display:flex;gap:8px}
-    .inputbar input[type=text]{flex:1;padding:12px 12px;border:1px solid #e5e7eb;border-radius:20px;font:inherit}
-    .inputbar button{padding:0 16px;height:40px;border:none;border-radius:20px;background:var(--kakao-yellow);font-weight:700;color:#111;cursor:pointer}
+    /* Input area */
+    .inputbar{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:720px;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);border-top:1px solid rgba(14,165,233,.18);padding:10px}
+    .inputrow{display:flex;gap:8px;align-items:center}
+    .text{flex:1;border:1px solid var(--sky-200);border-radius:14px;padding:12px 12px;font:inherit}
+    .btn{height:40px;padding:0 14px;border:none;border-radius:12px;font-weight:700;cursor:pointer}
+    .btn-emoji{background:var(--sky-200);color:#0c4a6e}
+    .btn-send{background:var(--sky-400);color:#fff}
 
-    .small{font-size:12px;color:#6b7280}
+    /* Setup panel */
+    .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg,var(--sky-50),var(--white))}
+    .panel{background:#fff;border:1px solid rgba(14,165,233,.18);border-radius:16px;padding:14px}
+    .label{display:block;margin:10px 0 6px}
+    .field{width:100%;padding:10px;border:1px solid var(--sky-200);border-radius:10px;font:inherit}
+    .row{display:flex;gap:8px;margin-top:12px}
+    .link{font-size:12px;color:#0ea5e9}
+
+    /* Emoji picker */
+    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:8px 10px;max-height:220px;overflow:auto;border-top:1px solid rgba(14,165,233,.18);background:var(--sky-50)}
+    .emoji button{font-size:20px;background:transparent;border:none;cursor:pointer}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
       <div class="appbar">
-        <div style="display:flex;flex-direction:column">
-          <span class="title">1:1 채팅</span>
-          <span class="room">방: <span id="roomLabel"></span> · <span class="small">v ${APP_VERSION}</span></span>
+        <div class="brand">
+          <div class="cat">🐱</div>
+          <div>
+            <div class="title">Cloud Cat Chat</div>
+            <div class="subtitle">구름 위를 걷는 고양이 테마</div>
+          </div>
         </div>
+        <div class="status"><span>☁️</span><span id="online">offline</span></div>
       </div>
 
-      <div class="chat" id="chat"></div>
+      <div class="chat" id="chat">
+        <div class="divider"><div class="line"></div><div class="txt">오늘</div><div class="line"></div></div>
+      </div>
+
+      <div id="emojiWrap" class="emoji" style="display:none"></div>
 
       <div class="inputbar" id="inputbar" style="display:none">
-        <input id="text" type="text" placeholder="메시지 입력" />
-        <button id="send">전송</button>
+        <div class="inputrow">
+          <input id="text" class="text" type="text" placeholder="구름 속 고양이에게 말을 걸어보세요..." />
+          <button id="emojiBtn" class="btn btn-emoji" type="button">😊</button>
+          <button id="send" class="btn btn-send" type="button">야옹!</button>
+        </div>
+        <div class="subtitle" style="margin-top:4px">Enter를 눌러 전송</div>
       </div>
 
-      <div id="setup" style="padding:12px 12px 100px 12px;background:var(--kakao-bg)">
-        <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:12px">
-          <label>대화방 코드</label>
-          <input id="room" type="text" placeholder="예: myroom123" value="${room}" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px" />
+      <div id="setup" class="setup">
+        <div class="panel">
+          <label class="label">대화방 코드</label>
+          <input id="room" class="field" type="text" placeholder="예: myroom123" value="${room}" />
 
-          <label style="margin-top:10px">닉네임</label>
-          <input id="nick" type="text" placeholder="예: 민성" value="${nick}" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px" />
+          <label class="label">닉네임</label>
+          <input id="nick" class="field" type="text" placeholder="예: 민성" value="${nick}" />
 
-          <label style="margin-top:10px">방 키 (선택)</label>
-          <input id="key" type="password" placeholder="비밀번호" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px" />
+          <label class="label">방 키 (선택)</label>
+          <input id="key" class="field" type="password" placeholder="비밀번호" />
 
-          <div style="display:flex;gap:8px;margin-top:12px">
-            <button id="create" style="flex:0 0 auto;padding:10px 14px;border:none;border-radius:10px;background:var(--kakao-yellow);font-weight:700;cursor:pointer">입장</button>
-            <button id="makeLink" style="flex:0 0 auto;padding:10px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer">초대 링크</button>
+          <div class="row">
+            <button id="create" class="btn btn-send" type="button">입장</button>
+            <button id="makeLink" class="btn btn-emoji" type="button">초대 링크</button>
           </div>
-          <div class="small" style="margin-top:8px">Invite link: <span id="invite"></span></div>
-          <div class="small" id="typing" style="min-height:16px;margin-top:6px"></div>
-          <div class="small" id="status" style="margin-top:6px">대기</div>
+          <div class="link" style="margin-top:6px">Invite link: <span id="invite"></span></div>
+          <div class="subtitle" id="typing" style="min-height:16px;margin-top:6px"></div>
+          <div class="subtitle" id="status" style="margin-top:6px">대기</div>
         </div>
       </div>
 
@@ -138,20 +167,20 @@ app.get('/', (req, res) => {
     const chatBox = $('#chat');
     const setup = $('#setup');
     const inputbar = $('#inputbar');
+    const emojiWrap = $('#emojiWrap');
 
     const roomInput = $('#room');
     const nickInput = $('#nick');
     const keyInput = $('#key');
     const invite = $('#invite');
-    const roomLabel = $('#roomLabel');
     const statusTag = $('#status');
     const typing = $('#typing');
+    const online = $('#online');
 
     function setInviteLink(r){
       const url = new URL(window.location);
       url.searchParams.set('room', r);
       invite.textContent = url.toString();
-      roomLabel.textContent = r || '-';
     }
 
     $('#makeLink').onclick = () => {
@@ -161,27 +190,35 @@ app.get('/', (req, res) => {
     };
 
     function addSys(msg){
-      const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight; }
-
+      const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
+    }
     function fmt(ts){ const d=new Date(ts); return d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function initial(n){ n=(n||'').trim(); return n? n[0].toUpperCase(): '?'; }
 
-    // Kakao-like renderer
     function addMsg(fromMe, name, text, ts){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
-      if(!fromMe){
-        const av = document.createElement('div'); av.className='avatar'; av.textContent = initial(name); row.appendChild(av);
-      }
+      if(!fromMe){ const av = document.createElement('div'); av.className='avatar'; av.textContent = initial(name); row.appendChild(av); }
       const b = document.createElement('div'); b.className='bubble';
-      const nameHtml = fromMe? '' : '<div class="name">' + esc(name) + '</div>';
       const textHtml = '<div class="text">' + esc(text) + '</div>';
       const metaHtml = '<div class="meta">' + fmt(ts||Date.now()) + '</div>';
-      b.innerHTML = nameHtml + textHtml + metaHtml;
+      b.innerHTML = textHtml + metaHtml;
       row.appendChild(b);
       chatBox.appendChild(row);
       chatBox.scrollTop = chatBox.scrollHeight;
     }
+
+    // Emoji picker
+    const emojis = ['😀','😁','😂','🤣','😊','😎','😍','🥰','🤔','😐','😶','😏','😮','😪','😴','😛','😜','🤪','🫠','😲','🙁','😞','😢','😭','😨','😱','🥵','🥶','😳','🤒','🤕','🤢','🤧','😇','🥳','🥺','🤠','🤡','👻','👽','🤖','🎃','😺','😸','😹','😻','😼','😽'];
+    function renderEmoji(){
+      emojiWrap.innerHTML = '';
+      emojis.forEach(e => {
+        const btn = document.createElement('button'); btn.textContent = e; btn.onclick = () => {
+          const t = document.querySelector('#text'); t.value = (t.value || '') + e; t.focus();
+        }; emojiWrap.appendChild(btn);
+      });
+    }
+    renderEmoji();
 
     let socket; let myNick; let myRoom; let joined=false; let typingTimer;
 
@@ -191,14 +228,14 @@ app.get('/', (req, res) => {
       const n = nickInput.value.trim();
       const k = keyInput.value.trim();
       if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); $('#create').disabled = false; return; }
-      myNick = n; myRoom = r; roomLabel.textContent = r;
+      myNick = n; myRoom = r;
       socket = io();
       socket.emit('join', { room: r, nick: n, key: k });
 
       socket.on('joined', (info)=>{
-        joined = true; statusTag.textContent = '연결됨';
+        joined = true; online.textContent = 'online';
         setInviteLink(myRoom);
-        setup.style.display='none'; inputbar.style.display='flex';
+        setup.style.display='none'; inputbar.style.display='block';
         addSys(info.msg);
         history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
       });
@@ -222,14 +259,21 @@ app.get('/', (req, res) => {
       socket.on('info', (m)=> addSys(m));
     };
 
-    $('#send').onclick = sendMsg;
-    $('#text').addEventListener('keydown', (e)=>{
+    document.querySelector('#send').onclick = sendMsg;
+    document.querySelector('#text').addEventListener('keydown', (e)=>{
       if(e.key==='Enter') sendMsg();
       else if(['Shift','Alt','Control','Meta'].includes(e.key)===false && joined) socket.emit('typing', myRoom);
     });
 
+    document.querySelector('#emojiBtn').onclick = () => {
+      const s = emojiWrap.style.display === 'none' ? 'grid' : 'none';
+      emojiWrap.style.display = s;
+      if (s === 'grid') document.querySelector('#text').focus();
+    };
+
     function sendMsg(){
-      const input = $('#text'); const val = input.value.trim(); if(!val) return;
+      const input = document.querySelector('#text');
+      const val = (input.value || '').trim(); if(!val) return;
       socket.emit('msg', { room: myRoom, text: val });
       addMsg(true, myNick, val, Date.now());
       input.value = '';
