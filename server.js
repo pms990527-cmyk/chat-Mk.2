@@ -1,10 +1,12 @@
 /**
  * Cloud Cat 1:1 Chat — Node.js + Socket.IO
- * - 테마/이모티콘/첨부 유지
- * - 레이아웃: 뷰포트 고정, 채팅은 스크롤 박스
- * - 읽음 표시(현실적 정의):
- *    상대 탭이 visible + 창 focus + 해당 메시지 버블이 채팅 뷰포트에 충분히 보일 때(read) 전송
- *    → 내 메시지 옆 '1' 제거
+ * - 테마/이모티콘/첨부/읽음표시 유지
+ * - 채팅 레이아웃: 뷰포트 고정, 내용만 스크롤
+ * - 타이핑 표시:
+ *    클라이언트: 입력 시 {room, state:1} 전송(1초에 1회), 1.5초 무입력 시 {state:0}
+ *    서버: 같은 방의 상대에게만 중계
+ *    UI: 채팅창 하단 왼쪽에 "닉네임 입력 중 …" 말풍선(점 애니메이션)
+ * - 읽음 표시(현실적): 상대 탭 visible + 창 focus + 메시지 뷰포트 노출 시에만 read 전송
  */
 const express = require('express');
 const http = require('http');
@@ -38,7 +40,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = "v-2025-09-21-12";
+const APP_VERSION = "v-2025-09-21-typing";
 
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
@@ -101,6 +103,7 @@ app.get('/', (req, res) => {
 
     .read{font-size:10px;color:#94a3b8;align-self:flex-end;margin-left:6px;opacity:.95}
 
+    /* 텍스트 외곽선/광택 강제 제거 */
     .bubble, .bubble * { -webkit-text-stroke:0 !important; text-shadow:none !important; -webkit-font-smoothing:antialiased !important; -moz-osx-font-smoothing:grayscale !important; mix-blend-mode:normal !important; }
 
     .bubble img{display:block;max-width:280px;height:auto;border-radius:12px}
@@ -132,6 +135,21 @@ app.get('/', (req, res) => {
     .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:10px;max-height:240px;overflow:auto;background:var(--sky-50)}
     .emoji button{font-size:20px;background:transparent;border:1px solid rgba(2,6,23,.06);border-radius:8px;cursor:pointer;padding:6px}
     .emoji button:hover{background:#fff}
+
+    /* 타이핑 말풍선 */
+    .typing-flag{
+      position:sticky; bottom:8px; left:0;
+      display:none; align-items:center; gap:8px;
+      background:rgba(255,255,255,.97);
+      border:1px solid rgba(14,165,233,.22);
+      padding:6px 10px; border-radius:12px; color:#0f172a;
+      font-size:12px; box-shadow:0 8px 24px rgba(2,6,23,.08); max-width:70%;
+    }
+    .typing-flag .who{font-weight:600; color:#0284c7}
+    .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#94a3b8;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
+    .typing-flag .dots i:nth-child(2){animation-delay:.15s}
+    .typing-flag .dots i:nth-child(3){animation-delay:.3s}
+    @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
   </style>
 </head>
 <body>
@@ -185,7 +203,6 @@ app.get('/', (req, res) => {
             <button id="makeLink" class="btn btn-emoji" type="button">초대 링크</button>
           </div>
           <div class="link" style="margin-top:6px">Invite link: <span id="invite"></span></div>
-          <div class="subtitle" id="typing" style="min-height:16px;margin-top:6px"></div>
           <div class="subtitle" id="status" style="margin-top:6px">대기</div>
         </div>
       </div>
@@ -210,7 +227,6 @@ app.get('/', (req, res) => {
     const keyInput = $('#key');
     const invite = $('#invite');
     const statusTag = $('#status');
-    const typing = $('#typing');
     const online = $('#online');
     const fileInput = $('#file');
 
@@ -232,29 +248,23 @@ app.get('/', (req, res) => {
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function initial(n){ n=(n||'').trim(); return n? n[0].toUpperCase(): '?'; }
     function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return (b/1024).toFixed(1)+' KB'; return (b/1024/1024).toFixed(2)+' MB'; }
-
-    // ---- 읽음 로직을 위한 유틸 ----
     function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
+    // 읽음 조건
     let hasFocus = document.hasFocus();
     let visible = document.visibilityState === 'visible';
     function isAttended(){ return hasFocus && visible; }
-
     window.addEventListener('focus', ()=>{ hasFocus = true; rescanUnread(); });
     window.addEventListener('blur', ()=>{ hasFocus = false; });
-    document.addEventListener('visibilitychange', ()=>{
-      visible = document.visibilityState === 'visible';
-      if (visible) rescanUnread();
-    });
+    document.addEventListener('visibilitychange', ()=>{ visible = document.visibilityState === 'visible'; if (visible) rescanUnread(); });
 
-    const readSent = new Set();   // 이미 read 보낸 id
+    const readSent = new Set();
     function sendRead(id){
       if (!window.socket || readSent.has(id)) return;
       readSent.add(id);
       window.socket.emit('read', { room: myRoom, id });
     }
 
-    // 채팅 뷰포트 안에서 "충분히 보이는지" 검사
     const OBS_THRESHOLD = 0.75;
     const observer = new IntersectionObserver((entries)=>{
       if (!isAttended()) return;
@@ -268,16 +278,30 @@ app.get('/', (req, res) => {
 
     function rescanUnread(){
       if (!isAttended()) return;
-      // 현재 DOM에 있는 '상대 메시지' 중 미확인 것들을 관찰
       document.querySelectorAll('.msg.them[data-mid]').forEach(el=>{
         const id = el.getAttribute('data-mid');
         if (!id || readSent.has(id)) return;
         observer.observe(el);
-        // 바로 보이는 상태라면 observer 콜백이 곧 실행됨
       });
     }
 
-    // ---- 렌더러 ----
+    // 타이핑 말풍선 생성(항상 DOM의 마지막에 위치시키자)
+    const typingFlag = document.createElement('div');
+    typingFlag.className = 'typing-flag';
+    typingFlag.innerHTML = '<span class="who"></span> 입력 중 <span class="dots"><i></i><i></i><i></i></span>';
+    const typingWho = typingFlag.querySelector('.who');
+    let typingHideTimer = null;
+    function showTyping(name){
+      typingWho.textContent = name;
+      typingFlag.style.display = 'inline-flex';
+      chatBox.appendChild(typingFlag); // 항상 끝으로
+      clearTimeout(typingHideTimer);
+      typingHideTimer = setTimeout(hideTyping, 1500);
+    }
+    function hideTyping(){
+      typingFlag.style.display = 'none';
+    }
+
     function addMsg(fromMe, name, text, ts, id){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(id) row.setAttribute('data-mid', id);
@@ -292,8 +316,7 @@ app.get('/', (req, res) => {
         const t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(ts||Date.now()); row.appendChild(t2);
       }
       chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
-
-      // 상대 메시지는 관찰 시작
+      chatBox.appendChild(typingFlag); // 타이핑 말풍선은 항상 맨 끝
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
@@ -307,7 +330,7 @@ app.get('/', (req, res) => {
         const img = document.createElement('img'); img.src = file.data; img.alt = file.name || 'image';
         b.appendChild(img);
         const meta = document.createElement('div'); meta.className='att';
-        meta.innerHTML = '<a href="' + file.data + '" download="' + esc(file.name||'image') + '">이미지 저장</a><span class="size">' + humanSize(file.size||0) + '</span>';
+        meta.innerHTML = '이미지 저장: <a href="' + file.data + '" download="' + esc(file.name||'image') + '">다운로드</a><span class="size">' + humanSize(file.size||0) + '</span>';
         b.appendChild(meta);
       } else {
         const meta = document.createElement('div'); meta.className='att';
@@ -321,11 +344,11 @@ app.get('/', (req, res) => {
         const t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(file.ts||Date.now()); row.appendChild(t2);
       }
       chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
-
+      chatBox.appendChild(typingFlag);
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // ---- 이모지 ----
+    // 이모지
     const animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
     const feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
     let currentTab = 'animals';
@@ -364,8 +387,8 @@ app.get('/', (req, res) => {
     comboChk.onchange = ()=>{ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
-    // ---- 소켓/입장/전송 ----
-    let socket; let myNick; let myRoom; let joined=false; let typingTimer; let joinGuard;
+    // 소켓/입장/전송
+    let socket; let myNick; let myRoom; let joined=false; let typingTimerSend; let typingActive=false; let lastTypingSent=0; let joinGuard;
 
     function enableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=false; }
     function disableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=true; }
@@ -402,27 +425,52 @@ app.get('/', (req, res) => {
       socket.on('peer_joined', (name)=> addSys(name + ' 님이 입장했습니다'));
       socket.on('peer_left', (name)=> addSys(name + ' 님이 퇴장했습니다'));
 
+      // 수신 텍스트/파일
       socket.on('msg', ({ id, nick, text, ts }) => { addMsg(false, nick, text, ts, id); if (id && isAttended()) sendRead(id); });
       socket.on('file', ({ id, nick, name, type, size, data, ts }) => { addFile(false, nick, { name, type, size, data, ts }, id); if (id && isAttended()) sendRead(id); });
 
+      // 읽음 수신
       socket.on('read', ({ id }) => { if (!id) return; const row = document.querySelector('.msg.me[data-mid="'+id+'"]'); if (row){ const badge=row.querySelector('.read'); if(badge) badge.remove(); } });
 
-      socket.on('typing', (name)=>{ typing.textContent = name + ' 입력 중...'; clearTimeout(typingTimer); typingTimer = setTimeout(()=> typing.textContent = '', 1200); });
-      socket.on('info', (m)=> addSys(m));
+      // 타이핑 표시 수신
+      socket.on('typing', ({ nick, state }) => {
+        if (state){ showTyping(nick || '상대'); }
+        else { hideTyping(); }
+      });
     };
 
     document.querySelector('#send').onclick = sendMsg;
-    document.querySelector('#text').addEventListener('keydown', (e)=>{
-      if(e.key==='Enter') sendMsg();
-      else if(['Shift','Alt','Control','Meta'].includes(e.key)===false && joined && window.socket) window.socket.emit('typing', myRoom);
-    });
+    document.querySelector('#text').addEventListener('keydown', handleTyping);
+    document.querySelector('#text').addEventListener('input', handleTyping);
+    document.querySelector('#text').addEventListener('blur', ()=>{ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } });
 
-    document.querySelector('#emojiBtn').onclick = () => { emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none'); };
+    function handleTyping(){
+      if(!window.socket || !joined) return;
+      const now = Date.now();
+      if(!typingActive || now - lastTypingSent > 1000){
+        window.socket.emit('typing', { room: myRoom, state: 1 });
+        typingActive = true; lastTypingSent = now;
+      }
+      clearTimeout(typingTimerSend);
+      typingTimerSend = setTimeout(()=>{ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
+    }
+
+    document.querySelector('#emojiBtn').onclick = () => {
+      emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none');
+    };
 
     document.querySelector('#attach').onclick = () => fileInput.click();
-    fileInput.onchange = () => { const files = Array.from(fileInput.files||[]); files.forEach(f => sendFile(f)); fileInput.value = ''; };
+    fileInput.onchange = () => {
+      const files = Array.from(fileInput.files||[]);
+      files.forEach(f => sendFile(f));
+      fileInput.value = '';
+    };
 
-    document.addEventListener('paste', (e)=>{ if(!joined) return; const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : []; items.forEach(it => { if (it.kind === 'file') { const f = it.getAsFile(); if (f) sendFile(f); } }); });
+    document.addEventListener('paste', (e)=>{
+      if(!joined) return;
+      const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
+      items.forEach(it => { if (it.kind === 'file') { const f = it.getAsFile(); if (f) sendFile(f); } });
+    });
 
     function sendMsg(){
       if(!window.socket){ addSys('연결되지 않음'); return; }
@@ -432,6 +480,8 @@ app.get('/', (req, res) => {
       window.socket.emit('msg', { room: myRoom, id: id, text: val });
       addMsg(true, myNick, val, Date.now(), id);
       input.value = '';
+      // 전송 후 타이핑 종료 신호
+      if(typingActive){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; }
     }
 
     const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel'];
@@ -451,7 +501,6 @@ app.get('/', (req, res) => {
       reader.readAsDataURL(file);
     }
 
-    // 사용자가 스크롤로 메시지를 화면에 올려놓았을 때도 관찰 반응하도록
     chatBox.addEventListener('scroll', ()=> { if (isAttended()) rescanUnread(); });
 
     // URL prefill
@@ -536,12 +585,11 @@ io.on('connection', (socket) => {
     socket.to(room).emit('read', { id });
   });
 
-  socket.on('typing', (room) => {
+  // 타이핑 중계(시작/종료)
+  socket.on('typing', ({ room, state }) => {
     room = sanitize(room, 40);
-    const r = rooms.get(room);
-    if (!r) return;
     const nick = sanitize(socket.data.nick, 24) || '게스트';
-    socket.to(room).emit('typing', nick);
+    socket.to(room).emit('typing', { nick, state: !!state });
   });
 
   socket.on('disconnect', () => {
