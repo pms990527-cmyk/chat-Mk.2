@@ -1,10 +1,10 @@
 /**
- * Cloud Cat 1:1 Chat — Node.js + Socket.IO
- * - 테마/첨부/읽음표시/타이핑 유지
- * - 이모티콘: 클릭 → 입력창 삽입, 전송 버튼/엔터로 발송
- * - 이미지: 클릭 시 라이트박스 확대
- * - 닉네임: 아바타 옆, 말풍선 위에 작게
- * - Enter 즉시 전송(IME 조합 중일 땐 전송 방지)
+ * Cloud Cat Chat — No-Bubble + Keep-Alive
+ * - 로그인 없이 방/닉네임
+ * - 1:1, 초대링크 ?room=, 선택 키(비번)
+ * - 읽음표시(1), 타이핑 표시, 이모지(입력창 삽입), 파일 전송, 이미지 라이트박스
+ * - 말풍선 제거(No-Bubble), 자동 스크롤, Enter 전송
+ * - 유휴 끊김 방지(socket.io 핑 튜닝 + 앱 레벨 keep-alive)
  */
 const express = require('express');
 const http = require('http');
@@ -12,16 +12,22 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
+
+// 일부 프록시는 타임아웃이 짧다. 안전빵으로 여유를 준다.
+server.headersTimeout = 65_000;
+server.keepAliveTimeout = 61_000;
+
 const io = new Server(server, {
   cors: { origin: '*' },
   serveClient: true,
-  pingTimeout: 25000,
-  pingInterval: 20000,
+  pingInterval: 10_000,   // 10s 마다 ping
+  pingTimeout: 180_000,   // 3분까지 기다림
   maxHttpBufferSize: 8_000_000
 });
 
-// ---- In-memory rooms ----
+const APP_VERSION = 'v-2025-09-21-cloud-cat-no-bubble-ka';
 const rooms = new Map();
+
 function getRoom(roomId) {
   if (!rooms.has(roomId)) rooms.set(roomId, { key: null, users: new Set(), lastMsgs: [] });
   return rooms.get(roomId);
@@ -38,8 +44,6 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = 'v-2025-09-21-enter-send';
-
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
 app.get('/', (req, res) => {
@@ -53,110 +57,132 @@ app.get('/', (req, res) => {
   <title>Cloud Cat Chat</title>
   <style>
     :root{
-      --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc; --sky-400:#38bdf8;
-      --ink:#0f172a; --muted:#64748b; --white:#ffffff; --header-h:58px;
+      /* CloudCat 컬러 */
+      --sky-top:#0a1640; --sky-mid:#0f2b66; --sky-bot:#12386e;
+      --cloud-1:rgba(255,255,255,.08); --cloud-2:rgba(200,225,255,.10);
+      --ink:#e6f0ff; --muted:#9fb4d6;
+      --them-text:#f2f6ff; --me-text:#d6f0ff;
+      --header-h:58px;
+      --card-bg:rgba(8,14,34,.74);
+      --border:rgba(157,178,241,.18);
     }
     *{box-sizing:border-box}
     html,body{height:100%}
-    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;background:linear-gradient(180deg,var(--sky-100),var(--white));color:var(--ink)}
-    .wrap{max-width:720px;margin:0 auto;min-height:100%;padding:0 12px}
-
+    body{
+      margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",Arial;
+      color:var(--ink);
+      background:
+        radial-gradient(1000px 600px at 15% -10%, var(--cloud-1), transparent 60%),
+        radial-gradient(900px 600px at 80% 0%, var(--cloud-2), transparent 55%),
+        radial-gradient(1200px 700px at 50% 120%, rgba(180,210,255,.08), transparent 60%),
+        linear-gradient(180deg,var(--sky-top),var(--sky-mid) 40%, var(--sky-bot));
+      -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
+    }
+    .wrap{max-width:760px;margin:0 auto;min-height:100%;padding:0 12px}
     .card{
       height:100dvh; height:100svh;
-      background:rgba(255,255,255,.85);
-      backdrop-filter:blur(6px);
-      border:1px solid rgba(14,165,233,.12);
-      border-radius:24px;
-      box-shadow:0 12px 40px rgba(2,6,23,.08);
-      overflow:hidden;
-      display:flex; flex-direction:column;
+      background:var(--card-bg);
+      backdrop-filter:blur(10px) saturate(112%);
+      border:1px solid var(--border);
+      border-radius:24px; box-shadow:0 18px 60px rgba(6,10,26,.55), inset 0 0 0 1px rgba(255,255,255,.02);
+      overflow:hidden; display:flex; flex-direction:column;
     }
-
-    .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(255,255,255,.9);border-bottom:1px solid rgba(14,165,233,.18)}
+    .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid var(--border)}
     .brand{display:flex;gap:10px;align-items:center}
-    .cat{width:36px;height:36px;border-radius:999px;background:var(--sky-200);display:flex;align-items:center;justify-content:center}
-    .title{font-weight:800;color:#0284c7}
-    .subtitle{font-size:12px;color:#64748b;font-family:ui-serif, Georgia, serif}
-    .status{display:flex;gap:6px;align-items:center;color:#0284c7;font-size:12px;font-family:ui-serif, Georgia, serif}
+    .cat{width:36px;height:36px;border-radius:999px;background:linear-gradient(180deg,#60a5fa,#a78bfa);display:flex;align-items:center;justify-content:center;box-shadow:0 0 24px rgba(96,165,250,.35)}
+    .title{font-weight:800;color:#c7d2fe}
+    .subtitle{font-size:12px;color:var(--muted)}
+    .status{font-size:12px;color:#8be0ff}
 
-    .chat{flex:1; min-height:0; overflow:auto;
-      background:linear-gradient(180deg,var(--sky-50),var(--white));
+    .chat{flex:1;min-height:0;overflow:auto;background:
+      linear-gradient(180deg, rgba(99,179,237,.08), rgba(167,139,250,.06) 40%, transparent 80%);
       padding:14px 14px 110px 14px}
     .divider{display:flex;align-items:center;gap:8px;margin:8px 0}
-    .divider .line{height:1px;background:rgba(14,165,233,.35);flex:1}
-    .divider .txt{font-size:12px;color:#0ea5e9;font-family:ui-serif, Georgia, serif}
+    .divider .line{height:1px;background:var(--border);flex:1}
+    .divider .txt{font-size:12px;color:#a7c5ff;font-family:ui-serif, Georgia, serif}
 
-    .msg{display:flex;gap:8px;margin:8px 0;align-items:flex-end}
+    /* ===== 메시지 레이아웃 (No-Bubble) ===== */
+    .msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
     .msg.me{justify-content:flex-end}
-    .avatar{width:32px;height:32px;border-radius:50%;background:var(--sky-200);display:flex;align-items:center;justify-content:center;font-size:18px}
+    .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(180deg,#60a5fa,#a78bfa);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 6px 20px rgba(96,165,250,.28)}
     .msg.me .avatar{display:none}
 
-    .stack{display:flex;flex-direction:column;max-width:76%}
-    .name{font-size:11px;color:#64748b;margin:0 0 4px 4px}
+    .stack{display:flex;flex-direction:column;max-width:60%}
+    @media (max-width:480px){ .stack{max-width:80%} }
+
+    .name{font-size:11px;opacity:.9;color:#bed3ff;margin:0 0 2px 6px}
     .msg.me .name{display:none}
 
-    .bubble{padding:10px 12px;border-radius:18px;line-height:1.45;word-break:break-word;background-clip:padding-box; position:relative}
-    .them .bubble{background:var(--white);border:1px solid var(--sky-200);color:#075985}
-    .me .bubble{background:var(--sky-400);color:#f8fafc;border:0;outline:none;box-shadow:0 8px 24px rgba(2,132,199,.25)}
-    .bubble img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:pointer}
-
-    .time{font-size:10px;color:#94a3b8;align-self:flex-end;min-width:34px;text-align:center;opacity:.9}
+    .time{font-size:10px;color:rgba(220,235,255,.8);align-self:flex-end;min-width:32px;text-align:center}
     .msg.me .time{margin-right:6px}
     .msg.them .time{margin-left:6px}
-    .read{font-size:10px;color:#94a3b8;align-self:flex-end;margin-left:6px;opacity:.95}
+    .read{font-size:10px;color:rgba(220,235,255,.8);align-self:flex-end;margin-left:6px}
 
-    /* 텍스트 외곽선 제거 */
-    .bubble, .bubble * { -webkit-text-stroke:0 !important; text-shadow:none !important; -webkit-font-smoothing:antialiased !important; -moz-osx-font-smoothing:grayscale !important; mix-blend-mode:normal !important; }
+    .bubble{position:relative}
+    .bubble .text{
+      -webkit-font-smoothing:antialiased;
+      -webkit-text-fill-color:currentColor;
+      text-rendering:optimizeLegibility;
+      word-break:break-word;
+      line-height:1.24;
+    }
+    .me .bubble .text{ color:var(--me-text) }
+    .them .bubble .text{ color:var(--them-text) }
 
-    .att{margin-top:6px;font-size:12px}
-    .att a{color:#0ea5e9;text-decoration:none;word-break:break-all}
-    .att .size{color:#64748b;margin-left:6px}
+    .bubble img{
+      display:block;max-width:320px;height:auto;border-radius:12px;cursor:zoom-in;
+      box-shadow:0 12px 28px rgba(8,12,26,.28)
+    }
 
-    .inputbar{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:720px;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);border-top:1px solid rgba(14,165,233,.18);padding:10px}
+    /* ===== 입력줄 ===== */
+    .inputbar{
+      position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:760px;
+      background:rgba(6,12,26,.78);backdrop-filter:blur(10px) saturate(112%);
+      border-top:1px solid var(--border);padding:10px
+    }
     .inputrow{display:flex;gap:8px;align-items:center}
-    .text{flex:1;border:1px solid var(--sky-200);border-radius:14px;padding:12px 12px;font:inherit}
+    .text{flex:1;border:1px solid var(--border);background:rgba(255,255,255,.06);color:#e5f0ff;border-radius:14px;padding:12px 12px;font:inherit}
     .btn{height:40px;padding:0 14px;border:none;border-radius:12px;font-weight:700;cursor:pointer}
-    .btn-emoji{background:var(--sky-200);color:#0c4a6e}
-    .btn-attach{background:#e2e8f0;color:#0f172a}
-    .btn-send{background:var(--sky-400);color:#fff}
+    .btn-emoji{background:linear-gradient(180deg,#e879f9,#a78bfa);color:#111c3a}
+    .btn-attach{background:#223154;color:#dbeafe}
+    .btn-send{background:linear-gradient(180deg,#22d3ee,#60a5fa);color:#071226}
 
-    .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg,var(--sky-50),var(--white))}
-    .panel{background:#fff;border:1px solid rgba(14,165,233,.18);border-radius:16px;padding:14px}
-    .label{display:block;margin:10px 0 6px}
-    .field{width:100%;padding:10px;border:1px solid var(--sky-200);border-radius:10px;font:inherit}
+    /* ===== 설정 패널 ===== */
+    .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg, rgba(167,139,250,.08), rgba(34,211,238,.06))}
+    .panel{background:rgba(6,12,26,.74);border:1px solid var(--border);border-radius:16px;padding:14px}
+    .label{display:block;margin:10px 0 6px;color:#d9e6ff}
+    .field{width:100%;padding:10px;border:1px solid var(--border);border-radius:10px;font:inherit;background:rgba(255,255,255,.06);color:#e5e7eb}
     .row{display:flex;gap:8px;margin-top:12px}
-    .link{font-size:12px;color:#0ea5e9}
+    .link{font-size:12px;color:#a7c5ff}
 
-    .emoji-panel{position:fixed;left:0;right:0;bottom:60px;margin:0 auto;max-width:720px;background:var(--sky-50);border:1px solid rgba(14,165,233,.18);border-bottom:none;border-radius:14px 14px 0 0;box-shadow:0 -6px 24px rgba(2,6,23,.06);}
-    .emoji-tabs{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid rgba(14,165,233,.18);background:#fff;border-radius:14px 14px 0 0}
-    .emoji-tabs button{padding:6px 10px;border:1px solid rgba(2,6,23,.08);background:#f8fafc;border-radius:8px;cursor:pointer}
-    .emoji-tabs button.active{background:#fff;border-color:#0284c7;color:#0284c7}
-    .emoji-tabs .combo{margin-left:auto;font-size:12px;color:#64748b}
-    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:10px;max-height:240px;overflow:auto;background:var(--sky-50)}
-    .emoji button{font-size:20px;background:transparent;border:1px solid rgba(2,6,23,.06);border-radius:8px;cursor:pointer;padding:6px}
-    .emoji button:hover{background:#fff}
+    /* ===== 이모지 패널 ===== */
+    .emoji-panel{
+      position:fixed;left:0;right:0;bottom:60px;margin:0 auto;max-width:760px;
+      background:rgba(6,12,26,.9);border:1px solid var(--border);border-bottom:none;border-radius:14px 14px 0 0;
+      box-shadow:0 -8px 30px rgba(6,10,26,.55); color:#e5e7eb;
+    }
+    .emoji-tabs{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);background:rgba(10,18,36,.9);border-radius:14px 14px 0 0}
+    .emoji-tabs button{padding:6px 10px;border:1px solid rgba(167,139,250,.25);background:rgba(255,255,255,.06);color:#dbeafe;border-radius:8px;cursor:pointer}
+    .emoji-tabs button.active{background:rgba(167,139,250,.25);border-color:#a78bfa;color:#fff}
+    .emoji-tabs .combo{margin-left:auto;font-size:12px;color:#cbd5e1}
+    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:10px;max-height:240px;overflow:auto;background:rgba(11,18,36,.6)}
+    .emoji button{font-size:20px;background:transparent;border:1px solid rgba(167,139,250,.18);border-radius:8px;cursor:pointer;padding:6px;color:#fff}
+    .emoji button:hover{background:rgba(167,139,250,.18)}
 
-    /* 타이핑 말풍선 */
+    /* ===== 타이핑 플래그 ===== */
     .typing-flag{
       position:sticky; bottom:8px; left:0;
       display:none; align-items:center; gap:8px;
-      background:rgba(255,255,255,.97);
-      border:1px solid rgba(14,165,233,.22);
-      padding:6px 10px; border-radius:12px; color:#0f172a;
-      font-size:12px; box-shadow:0 8px 24px rgba(2,6,23,.08); max-width:70%;
+      background:rgba(8,12,26,.9);
+      border:1px solid var(--border);
+      padding:6px 10px; border-radius:12px; color:#e5e7eb;
+      font-size:12px; box-shadow:0 8px 24px rgba(2,6,23,.5); max-width:70%;
     }
-    .typing-flag .who{font-weight:600; color:#0284c7}
-    .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#94a3b8;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
-    .typing--flag .dots i:nth-child(2){animation-delay:.15s}
+    .typing-flag .who{font-weight:600; color:#a7c5ff}
+    .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#93a4c3;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
+    .typing-flag .dots i:nth-child(2){animation-delay:.15s}
     .typing-flag .dots i:nth-child(3){animation-delay:.3s}
     @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
-
-    /* 라이트박스 */
-    .viewer{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.7);z-index:50}
-    .viewer.active{display:flex}
-    .viewer .box{max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000}
-    .viewer img{max-width:92vw;max-height:92vh;display:block}
-    .viewer .close{position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer}
   </style>
 </head>
 <body>
@@ -167,10 +193,10 @@ app.get('/', (req, res) => {
           <div class="cat">🐱</div>
           <div>
             <div class="title">Cloud Cat Chat</div>
-            <div class="subtitle">구름 위를 걷는 고양이 테마 · v ${APP_VERSION}</div>
+            <div class="subtitle">구름위를 걷는 고양이 · ${APP_VERSION}</div>
           </div>
         </div>
-        <div class="status"><span>☁️</span><span id="online">offline</span></div>
+        <div class="status" id="online">offline</div>
       </div>
 
       <div class="chat" id="chat">
@@ -178,11 +204,12 @@ app.get('/', (req, res) => {
       </div>
 
       <!-- 라이트박스 -->
-      <div id="viewer" class="viewer" role="dialog" aria-modal="true">
-        <div class="close" id="viewerClose" title="닫기">✕</div>
-        <div class="box"><img id="viewerImg" alt=""></div>
+      <div id="viewer" role="dialog" aria-modal="true" style="display:none;align-items:center;justify-content:center;background:rgba(1,3,10,.86);position:fixed;inset:0;z-index:50">
+        <div id="viewerClose" title="닫기" style="position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer">✕</div>
+        <div class="box" style="max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000"><img id="viewerImg" alt="" style="max-width:92vw;max-height:92vh;display:block"></div>
       </div>
 
+      <!-- 이모지 패널 -->
       <div id="emojiPanel" class="emoji-panel" style="display:none">
         <div class="emoji-tabs">
           <button id="tabAnimals" class="active" type="button">동물</button>
@@ -192,17 +219,19 @@ app.get('/', (req, res) => {
         <div id="emojiGrid" class="emoji"></div>
       </div>
 
+      <!-- 입력줄 -->
       <div class="inputbar" id="inputbar" style="display:none">
         <div class="inputrow">
-          <input id="text" class="text" type="text" placeholder="구름 속 고양이에게 말을 걸어보세요..." />
+          <input id="text" class="text" type="text" placeholder="메시지를 입력하세요" />
           <input id="file" type="file" style="display:none" accept="image/*,.pdf,.txt,.zip,.doc,.docx,.ppt,.pptx,.xls,.xlsx"/>
           <button id="attach" class="btn btn-attach" type="button">📎</button>
           <button id="emojiBtn" class="btn btn-emoji" type="button">😊</button>
-          <button id="send" class="btn btn-send" type="button">야옹!</button>
+          <button id="send" class="btn btn-send" type="button">보내기</button>
         </div>
         <div class="subtitle" style="margin-top:4px">Enter 전송 · 2MB 이하 첨부 지원</div>
       </div>
 
+      <!-- 초기 설정 -->
       <div id="setup" class="setup">
         <div class="panel">
           <label class="label">대화방 코드</label>
@@ -224,77 +253,67 @@ app.get('/', (req, res) => {
 
   <script src="/socket.io/socket.io.js?v=${APP_VERSION}"></script>
   <script>
-    const $ = (s)=>document.querySelector(s);
-    const chatBox = $('#chat');
-    const setup = $('#setup');
-    const inputbar = $('#inputbar');
+    var $ = function(s){ return document.querySelector(s); };
+    var chatBox = $('#chat');
+    var setup = $('#setup');
+    var inputbar = $('#inputbar');
 
     // 라이트박스
-    const viewer = $('#viewer');
-    const viewerImg = $('#viewerImg');
-    const viewerClose = $('#viewerClose');
-    function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.classList.add('active'); }
-    function closeViewer(){ viewer.classList.remove('active'); viewerImg.src=''; }
-    viewer.addEventListener('click', (e)=>{ if(e.target===viewer) closeViewer(); });
+    var viewer = $('#viewer'); var viewerImg = $('#viewerImg'); var viewerClose = $('#viewerClose');
+    function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.style.display='flex'; }
+    function closeViewer(){ viewer.style.display='none'; viewerImg.src=''; }
+    viewer.addEventListener('click', function(e){ if(e.target===viewer) closeViewer(); });
     viewerClose.addEventListener('click', closeViewer);
-    window.addEventListener('keydown', (e)=>{ if(e.key==='Escape') closeViewer(); });
+    window.addEventListener('keydown', function(e){ if(e.key==='Escape') closeViewer(); });
 
-    // 이모지 패널
-    const emojiPanel = $('#emojiPanel');
-    const emojiGrid = $('#emojiGrid');
-    const tabAnimals = $('#tabAnimals');
-    const tabFeels = $('#tabFeels');
-    const comboChk = $('#comboMode');
+    // 이모지
+    var emojiPanel = $('#emojiPanel'), emojiGrid = $('#emojiGrid');
+    var tabAnimals = $('#tabAnimals'), tabFeels = $('#tabFeels'), comboChk = $('#comboMode');
 
     // 입력/상태
-    const roomInput = $('#room');
-    const nickInput = $('#nick');
-    const keyInput = $('#key');
-    const invite = $('#invite');
-    const statusTag = $('#status');
-    const online = $('#online');
-    const fileInput = $('#file');
-    const textInput = $('#text');
+    var roomInput = $('#room'), nickInput = $('#nick'), keyInput = $('#key');
+    var invite = $('#invite'), statusTag = $('#status'), online = $('#online');
+    var fileInput = $('#file'), textInput = $('#text');
 
     function setInviteLink(r){
-      const url = new URL(window.location);
+      var url = new URL(window.location);
       url.searchParams.set('room', r);
       invite.textContent = url.toString();
     }
-    $('#makeLink').onclick = () => {
-      const r = roomInput.value.trim();
+    $('#makeLink').onclick = function(){
+      var r = (roomInput.value||'').trim();
       if(!r){ alert('방 코드를 입력하세요'); return; }
       setInviteLink(r);
     };
 
     function addSys(msg){
-      const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
+      var d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
     }
-    function fmt(ts){ const d=new Date(ts); const h=String(d.getHours()).padStart(2,'0'); const m=String(d.getMinutes()).padStart(2,'0'); return h+':'+m; }
+    function fmt(ts){ var d=new Date(ts); var h=String(d.getHours()).padStart(2,'0'); var m=String(d.getMinutes()).padStart(2,'0'); return h+':'+m; }
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
-    // 읽음 조건
-    let hasFocus = document.hasFocus();
-    let visible = document.visibilityState === 'visible';
+    // 읽음 처리
+    var hasFocus = document.hasFocus();
+    var visible = document.visibilityState === 'visible';
     function isAttended(){ return hasFocus && visible; }
-    window.addEventListener('focus', ()=>{ hasFocus = true; rescanUnread(); });
-    window.addEventListener('blur', ()=>{ hasFocus = false; });
-    document.addEventListener('visibilitychange', ()=>{ visible = document.visibilityState === 'visible'; if (visible) rescanUnread(); });
+    window.addEventListener('focus', function(){ hasFocus = true; rescanUnread(); });
+    window.addEventListener('blur', function(){ hasFocus = false; });
+    document.addEventListener('visibilitychange', function(){ visible = document.visibilityState === 'visible'; if (visible) rescanUnread(); });
 
-    const readSent = new Set();
+    var readSent = new Set();
     function sendRead(id){
       if (!window.socket || readSent.has(id)) return;
       readSent.add(id);
-      window.socket.emit('read', { room: myRoom, id });
+      window.socket.emit('read', { room: myRoom, id: id });
     }
 
-    const OBS_THRESHOLD = 0.75;
-    const observer = new IntersectionObserver((entries)=>{
+    var OBS_THRESHOLD = 0.75;
+    var observer = new IntersectionObserver(function(entries){
       if (!isAttended()) return;
-      entries.forEach(e=>{
+      entries.forEach(function(e){
         if (e.intersectionRatio >= OBS_THRESHOLD) {
-          const id = e.target.getAttribute('data-mid');
+          var id = e.target.getAttribute('data-mid');
           if (id && !readSent.has(id)) sendRead(id);
         }
       });
@@ -302,19 +321,19 @@ app.get('/', (req, res) => {
 
     function rescanUnread(){
       if (!isAttended()) return;
-      document.querySelectorAll('.msg.them[data-mid]').forEach(el=>{
-        const id = el.getAttribute('data-mid');
+      document.querySelectorAll('.msg.them[data-mid]').forEach(function(el){
+        var id = el.getAttribute('data-mid');
         if (!id || readSent.has(id)) return;
         observer.observe(el);
       });
     }
 
-    // 타이핑 말풍선
-    const typingFlag = document.createElement('div');
+    // 타이핑 플래그
+    var typingFlag = document.createElement('div');
     typingFlag.className = 'typing-flag';
     typingFlag.innerHTML = '<span class="who"></span> 입력 중 <span class="dots"><i></i><i></i><i></i></span>';
-    const typingWho = typingFlag.querySelector('.who');
-    let typingHideTimer = null;
+    var typingWho = typingFlag.querySelector('.who');
+    var typingHideTimer = null;
     function showTyping(name){
       typingWho.textContent = name || '상대';
       typingFlag.style.display = 'inline-flex';
@@ -324,33 +343,33 @@ app.get('/', (req, res) => {
     }
     function hideTyping(){ typingFlag.style.display = 'none'; }
 
-    // 메시지 렌더
-    function makeStack(){ const s = document.createElement('div'); s.className = 'stack'; return s; }
+    // 메시지 렌더러
+    function makeStack(){ var s = document.createElement('div'); s.className = 'stack'; return s; }
     function addMsg(fromMe, name, text, ts, id){
-      const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
+      var row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(id) row.setAttribute('data-mid', id);
 
       if(!fromMe){
-        const av = document.createElement('div'); av.className='avatar'; av.textContent = '🐾';
+        var av = document.createElement('div'); av.className='avatar'; av.textContent = '🐾';
         row.appendChild(av);
       } else {
-        const t = document.createElement('span'); t.className='time'; t.textContent = fmt(ts||Date.now()); row.appendChild(t);
+        var t = document.createElement('span'); t.className='time'; t.textContent = fmt(ts||Date.now()); row.appendChild(t);
       }
 
-      const stack = makeStack();
+      var stack = makeStack();
       if(!fromMe){
-        const nm = document.createElement('div'); nm.className='name'; nm.textContent = name || '상대';
+        var nm = document.createElement('div'); nm.className='name'; nm.textContent = name || '상대';
         stack.appendChild(nm);
       }
-      const b = document.createElement('div'); b.className='bubble';
+      var b = document.createElement('div'); b.className='bubble';
       b.innerHTML = '<div class="text">' + esc(text) + '</div>';
       stack.appendChild(b);
       row.appendChild(stack);
 
       if(fromMe){
-        const r = document.createElement('span'); r.className='read'; r.textContent='1'; row.appendChild(r);
+        var r = document.createElement('span'); r.className='read'; r.textContent='1'; row.appendChild(r);
       } else {
-        const t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(ts||Date.now()); row.appendChild(t2);
+        var t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(ts||Date.now()); row.appendChild(t2);
       }
 
       chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
@@ -360,42 +379,42 @@ app.get('/', (req, res) => {
 
     function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return (b/1024).toFixed(1)+' KB'; return (b/1024/1024).toFixed(2)+' MB'; }
     function addFile(fromMe, name, file, id){
-      const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
+      var row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(id) row.setAttribute('data-mid', id);
 
       if(!fromMe){
-        const av = document.createElement('div'); av.className='avatar'; av.textContent = '🐾';
+        var av = document.createElement('div'); av.className='avatar'; av.textContent = '🐾';
         row.appendChild(av);
       } else {
-        const t = document.createElement('span'); t.className='time'; t.textContent = fmt(file.ts||Date.now()); row.appendChild(t);
+        var t = document.createElement('span'); t.className='time'; t.textContent = fmt(file.ts||Date.now()); row.appendChild(t);
       }
 
-      const stack = makeStack();
+      var stack = makeStack();
       if(!fromMe){
-        const nm = document.createElement('div'); nm.className='name'; nm.textContent = name || '상대';
+        var nm = document.createElement('div'); nm.className='name'; nm.textContent = name || '상대';
         stack.appendChild(nm);
       }
 
-      const b = document.createElement('div'); b.className='bubble';
+      var b = document.createElement('div'); b.className='bubble';
       if ((file.type||'').startsWith('image/')) {
-        const img = document.createElement('img'); img.src = file.data; img.alt = file.name || 'image';
-        img.addEventListener('click', ()=> openViewer(img.src, img.alt));
+        var img = document.createElement('img'); img.src = file.data; img.alt = file.name || 'image';
+        img.addEventListener('click', function(){ openViewer(img.src, img.alt); });
         b.appendChild(img);
-        const meta = document.createElement('div'); meta.className='att';
-        meta.innerHTML = '<a href="' + file.data + '" download="' + esc(file.name||'image') + '">이미지 저장</a><span class="size">' + humanSize(file.size||0) + '</span>';
+        var meta = document.createElement('div'); meta.className='att';
+        meta.innerHTML = '<a href="' + file.data + '" download="' + esc(file.name||'image') + '">이미지 저장</a><span class="size"> ' + humanSize(file.size||0) + '</span>';
         b.appendChild(meta);
       } else {
-        const meta = document.createElement('div'); meta.className='att';
-        meta.innerHTML = '파일: <a href="' + file.data + '" download="' + esc(file.name||'file') + '">' + esc(file.name||'file') + '</a><span class="size">' + humanSize(file.size||0) + '</span>';
-        b.appendChild(meta);
+        var meta2 = document.createElement('div'); meta2.className='att';
+        meta2.innerHTML = '파일: <a href="' + file.data + '" download="' + esc(file.name||'file') + '">' + esc(file.name||'file') + '</a><span class="size"> ' + humanSize(file.size||0) + '</span>';
+        b.appendChild(meta2);
       }
       stack.appendChild(b);
       row.appendChild(stack);
 
       if(fromMe){
-        const r = document.createElement('span'); r.className='read'; r.textContent='1'; row.appendChild(r);
+        var r = document.createElement('span'); r.className='read'; r.textContent='1'; row.appendChild(r);
       } else {
-        const t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(file.ts||Date.now()); row.appendChild(t2);
+        var t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(file.ts||Date.now()); row.appendChild(t2);
       }
 
       chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
@@ -403,42 +422,31 @@ app.get('/', (req, res) => {
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // 이모지: 입력창에 삽입만
-    const animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
-    const feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
-    let currentTab = 'animals';
-    let comboMode = false;
-    let pickedAnimal = null;
+    // 이모지 데이터/삽입
+    var animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
+    var feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
+    var currentTab = 'animals', comboMode = false, pickedAnimal = null;
 
     function insertAtCursor(input, s){
       input.focus();
-      const start = input.selectionStart ?? input.value.length;
-      const end = input.selectionEnd ?? input.value.length;
-      const before = input.value.slice(0,start);
-      const after = input.value.slice(end);
+      var start = input.selectionStart || input.value.length;
+      var end = input.selectionEnd || input.value.length;
+      var before = input.value.slice(0,start);
+      var after = input.value.slice(end);
       input.value = before + s + after;
-      const pos = start + s.length;
+      var pos = start + s.length;
       input.setSelectionRange(pos, pos);
     }
-
     function chooseEmoji(sym){
       if (comboMode){
-        if (currentTab === 'animals'){
-          pickedAnimal = sym; currentTab = 'feelings'; setTabUI(); renderEmoji();
-        } else if (pickedAnimal){
-          insertAtCursor(textInput, pickedAnimal + sym);
-          pickedAnimal = null; currentTab = 'animals'; setTabUI(); renderEmoji();
-        } else {
-          insertAtCursor(textInput, sym);
-        }
-      } else {
-        insertAtCursor(textInput, sym);
-      }
+        if (currentTab === 'animals'){ pickedAnimal = sym; currentTab = 'feelings'; setTabUI(); renderEmoji(); }
+        else if (pickedAnimal){ insertAtCursor(textInput, pickedAnimal + sym); pickedAnimal = null; currentTab = 'animals'; setTabUI(); renderEmoji(); }
+        else { insertAtCursor(textInput, sym); }
+      } else { insertAtCursor(textInput, sym); }
     }
-
     function renderEmoji(){
       emojiGrid.innerHTML = '';
-      const list = currentTab === 'animals' ? animals : feelings;
+      var list = currentTab === 'animals' ? animals : feelings;
       for (var i=0;i<list.length;i++){
         var sym = list[i];
         var btn = document.createElement('button');
@@ -448,139 +456,153 @@ app.get('/', (req, res) => {
       }
     }
     function setTabUI(){ if(currentTab==='animals'){ tabAnimals.classList.add('active'); tabFeels.classList.remove('active'); } else { tabFeels.classList.add('active'); tabAnimals.classList.remove('active'); } }
-    tabAnimals.onclick = ()=>{ currentTab='animals'; setTabUI(); renderEmoji(); };
-    tabFeels.onclick = ()=>{ currentTab='feelings'; setTabUI(); renderEmoji(); };
-    comboChk.onchange = ()=>{ comboMode = comboChk.checked; pickedAnimal = null; };
+    tabAnimals.onclick = function(){ currentTab='animals'; setTabUI(); renderEmoji(); };
+    tabFeels.onclick = function(){ currentTab='feelings'; setTabUI(); renderEmoji(); };
+    comboChk.onchange = function(){ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
-    // 소켓/입장/전송/타이핑
-    let socket; let myNick; let myRoom; let joined=false; let typingTimerSend; let typingActive=false; let lastTypingSent=0; let joinGuard;
-    let composing = false; // IME 한글 조합 중 여부
+    // 소켓 연결
+    var socket; var myNick; var myRoom; var joined=false; var typingTimerSend; var typingActive=false; var lastTypingSent=0; var joinGuard;
+    var composing = false;
+    var keepAliveTimer = null;
 
-    function enableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=false; }
-    function disableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=true; }
+    function enableCreate(){ var b=document.querySelector('#create'); if(b) b.disabled=false; }
+    function disableCreate(){ var b=document.querySelector('#create'); if(b) b.disabled=true; }
 
-    document.querySelector('#create').onclick = () => {
+    document.querySelector('#create').onclick = function(){
       if (socket) return; disableCreate();
-      const r = (roomInput.value || '').trim();
-      const n = (nickInput.value || '').trim();
-      const k = (keyInput.value || '').trim();
+      var r = (roomInput.value || '').trim();
+      var n = (nickInput.value || '').trim();
+      var k = (keyInput.value || '').trim();
       if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); enableCreate(); return; }
       myNick = n; myRoom = r;
 
-      socket = io({ path:'/socket.io', transports:['websocket','polling'], forceNew:true, reconnection:true, reconnectionAttempts:5, timeout:10000 });
-      joinGuard = setTimeout(()=>{ if(!joined){ enableCreate(); addSys('서버 응답 지연. 다시 시도하세요.'); } }, 12000);
+      socket = io({
+        path:'/socket.io',
+        transports:['websocket','polling'],
+        forceNew:true,
+        reconnection:true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1000,
+        reconnectionDelayMax: 5000,
+        timeout: 15000
+      });
+      joinGuard = setTimeout(function(){ if(!joined){ enableCreate(); addSys('서버 응답 지연. 다시 시도하세요.'); } }, 16000);
 
-      socket.on('connect', ()=> addSys('서버 연결됨'));
-      socket.on('connect_error', (err)=>{ addSys('연결 실패: ' + (err && err.message ? err.message : err)); alert('연결 실패: ' + (err && err.message ? err.message : err)); enableCreate(); socket.close(); socket=null; });
+      socket.on('connect', function(){ addSys('서버 연결됨'); online.textContent='online'; });
+      socket.on('connect_error', function(err){ addSys('연결 실패: ' + (err && err.message ? err.message : err)); alert('연결 실패: ' + (err && err.message ? err.message : err)); enableCreate(); socket.close(); socket=null; });
 
       socket.emit('join', { room: r, nick: n, key: k });
 
-      socket.on('joined', (info)=>{
-        joined = true; clearTimeout(joinGuard); online.textContent = 'online';
+      socket.on('joined', function(info){
+        joined = true; clearTimeout(joinGuard);
         window.socket = socket; window.myRoom = myRoom; window.myNick = myNick;
         setInviteLink(myRoom);
         setup.style.display='none'; inputbar.style.display='block';
         addSys(info.msg);
         history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
         rescanUnread();
+
+        // 앱 레벨 keep-alive: 10s마다 ka 전송
+        if (keepAliveTimer) clearInterval(keepAliveTimer);
+        keepAliveTimer = setInterval(function(){
+          if (socket && socket.connected) socket.emit('ka', Date.now());
+        }, 10_000);
       });
 
-      socket.on('join_error', (err)=>{ clearTimeout(joinGuard); addSys('입장 실패: ' + err); alert('입장 실패: ' + err); statusTag.textContent='거부됨'; enableCreate(); socket.disconnect(); socket=null; });
-      socket.on('disconnect', (reason)=> { if(!joined) enableCreate(); addSys('연결이 끊어졌습니다: ' + reason); });
+      socket.on('disconnect', function(reason){
+        online.textContent='offline';
+        if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
+        if(!joined) enableCreate();
+        addSys('연결이 끊어졌습니다: ' + reason + ' (자동 재연결 시도)');
+      });
 
-      socket.on('peer_joined', (name)=> addSys(name + ' 님이 입장했습니다'));
-      socket.on('peer_left', (name)=> addSys(name + ' 님이 퇴장했습니다'));
+      socket.on('join_error', function(err){ clearTimeout(joinGuard); addSys('입장 실패: ' + err); alert('입장 실패: ' + err); statusTag.textContent='거부됨'; enableCreate(); socket.disconnect(); socket=null; });
 
-      socket.on('msg', ({ id, nick, text, ts }) => { addMsg(false, nick, text, ts, id); if (id && isAttended()) sendRead(id); });
-      socket.on('file', ({ id, nick, name, type, size, data, ts }) => { addFile(false, nick, { name, type, size, data, ts }, id); if (id && isAttended()) sendRead(id); });
+      socket.on('peer_joined', function(name){ addSys(name + ' 님이 입장했습니다'); });
+      socket.on('peer_left', function(name){ addSys(name + ' 님이 퇴장했습니다'); });
 
-      socket.on('read', ({ id }) => { if (!id) return; const row = document.querySelector('.msg.me[data-mid="'+id+'"]'); if (row){ const badge=row.querySelector('.read'); if(badge) badge.remove(); } });
+      socket.on('msg', function(payload){ var id = payload.id; addMsg(false, payload.nick, payload.text, payload.ts, id); if (id && isAttended()) sendRead(id); });
+      socket.on('file', function(p){ var id = p.id; addFile(false, p.nick, { name: p.name, type: p.type, size: p.size, data: p.data, ts: p.ts }, id); if (id && isAttended()) sendRead(id); });
 
-      socket.on('typing', ({ nick, state }) => { if (state){ showTyping(nick || '상대'); } else { hideTyping(); } });
+      socket.on('read', function(p){ if (!p || !p.id) return; var row = document.querySelector('.msg.me[data-mid="'+p.id+'"]'); if (row){ var badge=row.querySelector('.read'); if(badge) badge.remove(); } });
+
+      socket.on('typing', function(p){ if (p && p.state){ showTyping(p.nick || '상대'); } else { hideTyping(); } });
+
+      // 서버의 ka 응답은 무시(데이터 흐름만 유지시키면 됨)
+      socket.on('ka', function(){});
     };
 
-    // 전송 버튼
+    // 입력/전송/타이핑
     $('#send').onclick = sendMsg;
 
-    // 타이핑 + 엔터 전송
-    textInput.addEventListener('compositionstart', ()=> { composing = true; });
-    textInput.addEventListener('compositionend', ()=> { composing = false; });
-    textInput.addEventListener('keydown', (e)=>{
-      // IME 조합 중에는 엔터 무시
+    textInput.addEventListener('compositionstart', function(){ composing = true; });
+    textInput.addEventListener('compositionend', function(){ composing = false; });
+    textInput.addEventListener('keydown', function(e){
       if ((e.key === 'Enter' || e.key === 'NumpadEnter') && !e.shiftKey) {
-        if (!composing) {
-          e.preventDefault();
-          sendMsg();
-          return;
-        }
+        if (!composing) { e.preventDefault(); sendMsg(); return; }
       }
       handleTyping();
     });
     textInput.addEventListener('input', handleTyping);
-    textInput.addEventListener('blur', ()=>{ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } });
+    textInput.addEventListener('blur', function(){ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } });
 
     function handleTyping(){
       if(!window.socket || !joined) return;
-      const now = Date.now();
-      if(!typingActive || now - lastTypingSent > 1000){
+      var n = Date.now();
+      if(!typingActive || n - lastTypingSent > 1000){
         window.socket.emit('typing', { room: myRoom, state: 1 });
-        typingActive = true; lastTypingSent = now;
+        typingActive = true; lastTypingSent = n;
       }
       clearTimeout(typingTimerSend);
-      typingTimerSend = setTimeout(()=>{ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
+      typingTimerSend = setTimeout(function(){ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
     }
 
-    $('#emojiBtn').onclick = () => {
-      emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none');
-    };
+    // 이모지 패널
+    $('#emojiBtn').onclick = function(){ emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none'); };
 
-    $('#attach').onclick = () => fileInput.click();
-    fileInput.onchange = () => {
-      const files = Array.from(fileInput.files||[]);
-      files.forEach(f => sendFile(f));
-      fileInput.value = '';
-    };
-
-    document.addEventListener('paste', (e)=>{
+    // 파일 전송
+    $('#attach').onclick = function(){ fileInput.click(); };
+    fileInput.onchange = function(){ var files = Array.from(fileInput.files||[]); files.forEach(function(f){ sendFile(f); }); fileInput.value = ''; };
+    document.addEventListener('paste', function(e){
       if(!joined) return;
-      const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
-      items.forEach(it => { if (it.kind === 'file') { const f = it.getAsFile(); if (f) sendFile(f); } });
+      var items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
+      items.forEach(function(it){ if (it.kind === 'file') { var f = it.getAsFile(); if (f) sendFile(f); } });
     });
 
     function sendMsg(){
       if(!window.socket){ addSys('연결되지 않음'); return; }
-      const val = (textInput.value || '').trim(); if(!val) return;
-      const id = genId();
+      var val = (textInput.value || '').trim(); if(!val) return;
+      var id = genId();
       window.socket.emit('msg', { room: myRoom, id: id, text: val });
       addMsg(true, myNick, val, Date.now(), id);
       textInput.value = '';
       if(typingActive){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; }
     }
 
-    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel'];
-    const MAX_BYTES = 2_000_000;
+    var ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel'];
+    var MAX_BYTES = 2_000_000;
 
     function sendFile(file){
       if (!file) return;
       if (file.size > MAX_BYTES) { addSys('파일이 너무 큽니다(최대 2MB).'); return; }
-      if (!ALLOWED_TYPES.includes(file.type) && !file.type.startsWith('image/')) { addSys('허용되지 않은 파일 형식입니다.'); return; }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result;
-        const id = genId();
+      if (ALLOWED_TYPES.indexOf(file.type) === -1 && !(file.type||'').startsWith('image/')) { addSys('허용되지 않은 파일 형식입니다.'); return; }
+      var reader = new FileReader();
+      reader.onload = function(){
+        var dataUrl = reader.result;
+        var id = genId();
         addFile(true, myNick, { name: file.name, type: file.type, size: file.size, data: dataUrl, ts: Date.now() }, id);
         window.socket.emit('file', { room: myRoom, id: id, name: file.name, type: file.type, size: file.size, data: dataUrl });
       };
       reader.readAsDataURL(file);
     }
 
-    chatBox.addEventListener('scroll', ()=> { if (isAttended()) rescanUnread(); });
+    chatBox.addEventListener('scroll', function(){ if (isAttended()) rescanUnread(); });
 
-    // URL prefill
-    const url = new URL(window.location);
-    const r = url.searchParams.get('room');
-    const n = url.searchParams.get('nick');
+    // URL Prefill
+    var url = new URL(window.location);
+    var r = url.searchParams.get('room');
+    var n = url.searchParams.get('nick');
     if(r){ roomInput.value = r; setInviteLink(r); }
     if(n){ nickInput.value = n; }
   </script>
@@ -629,6 +651,7 @@ io.on('connection', (socket) => {
     socket.to(room).emit('msg', { id, nick, text, ts: now() });
   });
 
+  // 파일
   const ALLOWED_TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel']);
   const MAX_BYTES = 2_000_000;
   const MAX_DATAURL = 7_000_000;
@@ -664,6 +687,11 @@ io.on('connection', (socket) => {
     room = sanitize(room, 40);
     const nick = sanitize(socket.data.nick, 24) || '게스트';
     socket.to(room).emit('typing', { nick, state: !!state });
+  });
+
+  // 앱 레벨 keep-alive: 클라이언트가 보낸 ka 에 즉시 응답
+  socket.on('ka', () => {
+    socket.emit('ka', Date.now());
   });
 
   socket.on('disconnect', () => {
