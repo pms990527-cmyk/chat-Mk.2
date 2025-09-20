@@ -1,17 +1,6 @@
 /**
  * Mini 1:1 Chat — single-file Node.js + Socket.IO app
- * ---------------------------------------------------
- * Features
- * - No login/account. Users enter a nickname.
- * - Private room via invite link: https://YOUR_HOST/?room=abc123
- * - Optional room key (password). First entrant sets it; second must match.
- * - Strictly 1:1 (max 2 participants). Third user is rejected.
- * - Message, typing indicator, join/leave, basic spam/throttle.
- * - In-memory only; no database. Restart wipes rooms.
- *
- * How to run (locally)
- * 1) npm init -y && npm i express socket.io@4
- * 2) node server.js
+ * Fixed: nested backticks 제거. HTML 템플릿 내부는 문자열 연결만 사용.
  */
 const express = require('express');
 const http = require('http');
@@ -43,6 +32,8 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   const count = room.lastMsgs.reduce((acc, m) => acc + (m.from === socketId ? 1 : 0), 0);
   return count >= limit;
 }
+
+const APP_VERSION = "v-2025-09-21-03";
 
 app.get('/', (req, res) => {
   const { room = '', nick = '' } = req.query;
@@ -88,6 +79,7 @@ app.get('/', (req, res) => {
         <div>
           <h1>1:1 Private Chat</h1>
           <div class="small">Invite link: <span id="invite"></span></div>
+          <div class="small">Version: ${APP_VERSION}</div>
         </div>
         <div class="right"><span class="tag" id="status">대기</span></div>
       </div>
@@ -120,7 +112,7 @@ app.get('/', (req, res) => {
     </div>
   </div>
 
-  <script src="/socket.io/socket.io.js"></script>
+  <script src="/socket.io/socket.io.js?v=${APP_VERSION}"></script>
   <script>
     const $ = (s)=>document.querySelector(s);
     const roomInput = $('#room');
@@ -138,40 +130,38 @@ app.get('/', (req, res) => {
       invite.textContent = url.toString();
     }
 
-    $('#makeLink').onclick = () => {
+    document.querySelector('#makeLink').onclick = () => {
       const r = roomInput.value.trim();
       if(!r){ alert('방 코드를 입력하세요'); return; }
       setInviteLink(r);
     };
 
     function addSys(msg){
-      const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight; }
+      const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
+    }
 
-    // 시간 포맷터 추가
+    // 시간 포맷터
     function fmt(ts){ const d=new Date(ts); return d.toLocaleTimeString('ko-KR',{hour:'2-digit', minute:'2-digit'}); }
 
-    // 메시지 렌더러 교체(시간 포함)
+    // 메시지 렌더러 (문자열 연결, 백틱 금지)
     function addMsg(fromMe, name, text, ts){
       const row = document.createElement('div');
       row.className = 'msg ' + (fromMe ? 'me' : 'them');
       const b = document.createElement('div'); b.className='bubble';
-      // 템플릿 리터럴(백틱) 대신 문자열 연결로 작성하여 서버 템플릿 안에서 구문 오류 방지
       b.innerHTML = '<strong>' + name + '</strong><span class="time">' + fmt(ts || Date.now()) + '</span> ' + text;
-      row.appendChild(b); chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
-    }</strong><span class="time">${fmt(ts||Date.now())}</span> ` + text;
       row.appendChild(b); chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
     }
 
     let socket; let myNick; let myRoom; let joined = false; let typingTimer;
 
-    $('#create').onclick = () => {
+    document.querySelector('#create').onclick = () => {
       if (socket) return;                 // 중복 연결 방지
-      $('#create').disabled = true;       // 중복 클릭 방지
+      document.querySelector('#create').disabled = true; // 중복 클릭 방지
 
       const r = roomInput.value.trim();
       const n = nickInput.value.trim();
       const k = keyInput.value.trim();
-      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); $('#create').disabled = false; return; }
+      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); document.querySelector('#create').disabled = false; return; }
       myNick = n; myRoom = r;
       socket = io();
       socket.emit('join', { room: r, nick: n, key: k });
@@ -179,7 +169,7 @@ app.get('/', (req, res) => {
       socket.on('joined', (info)=>{
         joined = true; statusTag.textContent = '연결됨'; statusTag.style.background = '#86efac';
         setInviteLink(myRoom);
-        $('#setup').style.display='none'; chatUI.style.display='block';
+        document.querySelector('#setup').style.display='none'; chatUI.style.display='block';
         addSys(info.msg);
         history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
       });
@@ -187,7 +177,7 @@ app.get('/', (req, res) => {
       socket.on('join_error', (err)=>{
         addSys('입장 실패: ' + err);
         statusTag.textContent = '거부됨'; statusTag.style.background = '#fca5a5';
-        $('#create').disabled = false;   // 재시도 허용
+        document.querySelector('#create').disabled = false;   // 재시도 허용
         socket.disconnect(); socket = null; // 새 연결 허용
       });
 
@@ -207,14 +197,14 @@ app.get('/', (req, res) => {
       socket.on('info', (m)=> addSys(m));
     };
 
-    $('#send').onclick = sendMsg;
-    $('#text').addEventListener('keydown', (e)=>{
+    document.querySelector('#send').onclick = sendMsg;
+    document.querySelector('#text').addEventListener('keydown', (e)=>{
       if(e.key==='Enter') sendMsg();
       else if(['Shift','Alt','Control','Meta'].includes(e.key)===false && joined) socket.emit('typing', myRoom);
     });
 
     function sendMsg(){
-      const input = $('#text');
+      const input = document.querySelector('#text');
       const val = input.value.trim(); if(!val) return;
       socket.emit('msg', { room: myRoom, text: val });
       addMsg(true, myNick, val, Date.now()); // 내 화면에도 즉시 표시
