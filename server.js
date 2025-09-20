@@ -2,9 +2,9 @@
  * Cloud Cat 1:1 Chat — Node.js + Socket.IO
  * - 테마/이모티콘/첨부 유지
  * - 레이아웃: 뷰포트 고정, 채팅은 스크롤 박스
- * - 읽음 표시: 내 메시지 옆에 작은 "1" → 상대가 읽으면 즉시 사라짐
- *   구현: 클라이언트가 보낸 msg/file 에 client-id를 붙임(id), 수신측이 렌더 직후 read(id) 전송
- *   서버는 read(id)를 송신자에게 중계만 함(인메모리, 검증 없음)
+ * - 읽음 표시(현실적 정의):
+ *    상대 탭이 visible + 창 focus + 해당 메시지 버블이 채팅 뷰포트에 충분히 보일 때(read) 전송
+ *    → 내 메시지 옆 '1' 제거
  */
 const express = require('express');
 const http = require('http');
@@ -23,9 +23,7 @@ const io = new Server(server, {
 // ---- In-memory rooms ----
 const rooms = new Map();
 function getRoom(roomId) {
-  if (!rooms.has(roomId)) {
-    rooms.set(roomId, { key: null, users: new Set(), lastMsgs: [] });
-  }
+  if (!rooms.has(roomId)) rooms.set(roomId, { key: null, users: new Set(), lastMsgs: [] });
   return rooms.get(roomId);
 }
 function sanitize(str, max = 200) {
@@ -40,7 +38,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = "v-2025-09-21-11";
+const APP_VERSION = "v-2025-09-21-12";
 
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
@@ -63,7 +61,6 @@ app.get('/', (req, res) => {
     body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;background:linear-gradient(180deg,var(--sky-100),var(--white));color:var(--ink)}
     .wrap{max-width:720px;margin:0 auto;min-height:100%;padding:0 12px}
 
-    /* 뷰포트 고정 카드 */
     .card{
       height:100dvh; height:100svh;
       background:rgba(255,255,255,.85);
@@ -82,7 +79,6 @@ app.get('/', (req, res) => {
     .subtitle{font-size:12px;color:var(--muted);font-family:ui-serif, Georgia, serif}
     .status{display:flex;gap:6px;align-items:center;color:#0284c7;font-size:12px;font-family:ui-serif, Georgia, serif}
 
-    /* 채팅: 내용만 스크롤 */
     .chat{flex:1; min-height:0; overflow:auto;
       background:linear-gradient(180deg,var(--sky-50),var(--white));
       padding:14px 14px 110px 14px}
@@ -103,10 +99,8 @@ app.get('/', (req, res) => {
     .msg.me .time{margin-right:6px}
     .msg.them .time{margin-left:6px}
 
-    /* 읽음 배지: 작은 1 */
     .read{font-size:10px;color:#94a3b8;align-self:flex-end;margin-left:6px;opacity:.95}
 
-    /* 텍스트 외곽선/광택 강제 제거 */
     .bubble, .bubble * { -webkit-text-stroke:0 !important; text-shadow:none !important; -webkit-font-smoothing:antialiased !important; -moz-osx-font-smoothing:grayscale !important; mix-blend-mode:normal !important; }
 
     .bubble img{display:block;max-width:280px;height:auto;border-radius:12px}
@@ -195,7 +189,6 @@ app.get('/', (req, res) => {
           <div class="subtitle" id="status" style="margin-top:6px">대기</div>
         </div>
       </div>
-
     </div>
   </div>
 
@@ -240,19 +233,51 @@ app.get('/', (req, res) => {
     function initial(n){ n=(n||'').trim(); return n? n[0].toUpperCase(): '?'; }
     function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return (b/1024).toFixed(1)+' KB'; return (b/1024/1024).toFixed(2)+' MB'; }
 
-    // id 생성(알파넘, querySelector에 안전)
+    // ---- 읽음 로직을 위한 유틸 ----
     function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
-    // 읽음 처리 대기 큐(먼저 read가 와도 나중에 메시지가 붙을 수 있음)
-    const pendingReads = new Set();
-    function markRead(id){
-      const row = document.querySelector('.msg.me[data-mid="'+id+'"]');
-      if (!row) return false;
-      const badge = row.querySelector('.read');
-      if (badge) badge.remove();
-      return true;
+    let hasFocus = document.hasFocus();
+    let visible = document.visibilityState === 'visible';
+    function isAttended(){ return hasFocus && visible; }
+
+    window.addEventListener('focus', ()=>{ hasFocus = true; rescanUnread(); });
+    window.addEventListener('blur', ()=>{ hasFocus = false; });
+    document.addEventListener('visibilitychange', ()=>{
+      visible = document.visibilityState === 'visible';
+      if (visible) rescanUnread();
+    });
+
+    const readSent = new Set();   // 이미 read 보낸 id
+    function sendRead(id){
+      if (!window.socket || readSent.has(id)) return;
+      readSent.add(id);
+      window.socket.emit('read', { room: myRoom, id });
     }
 
+    // 채팅 뷰포트 안에서 "충분히 보이는지" 검사
+    const OBS_THRESHOLD = 0.75;
+    const observer = new IntersectionObserver((entries)=>{
+      if (!isAttended()) return;
+      entries.forEach(e=>{
+        if (e.intersectionRatio >= OBS_THRESHOLD) {
+          const id = e.target.getAttribute('data-mid');
+          if (id && !readSent.has(id)) sendRead(id);
+        }
+      });
+    }, { root: chatBox, threshold: [OBS_THRESHOLD] });
+
+    function rescanUnread(){
+      if (!isAttended()) return;
+      // 현재 DOM에 있는 '상대 메시지' 중 미확인 것들을 관찰
+      document.querySelectorAll('.msg.them[data-mid]').forEach(el=>{
+        const id = el.getAttribute('data-mid');
+        if (!id || readSent.has(id)) return;
+        observer.observe(el);
+        // 바로 보이는 상태라면 observer 콜백이 곧 실행됨
+      });
+    }
+
+    // ---- 렌더러 ----
     function addMsg(fromMe, name, text, ts, id){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(id) row.setAttribute('data-mid', id);
@@ -268,8 +293,8 @@ app.get('/', (req, res) => {
       }
       chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
 
-      // 미리 도착한 읽음 신호 적용
-      if(fromMe && id && pendingReads.has(id)){ markRead(id); pendingReads.delete(id); }
+      // 상대 메시지는 관찰 시작
+      if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
     function addFile(fromMe, name, file, id){
@@ -297,10 +322,10 @@ app.get('/', (req, res) => {
       }
       chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
 
-      if(fromMe && id && pendingReads.has(id)){ markRead(id); pendingReads.delete(id); }
+      if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // Emoji: single animals, optional combo with feelings
+    // ---- 이모지 ----
     const animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
     const feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
     let currentTab = 'animals';
@@ -325,30 +350,21 @@ app.get('/', (req, res) => {
         btn.type = 'button'; btn.textContent = sym;
         btn.onclick = (function(s){ return function(){
           if(comboMode){
-            if(currentTab==='animals'){
-              pickedAnimal = s; currentTab = 'feelings'; setTabUI(); renderEmoji();
-            } else if(pickedAnimal){
-              sendEmoji(pickedAnimal + s);
-            } else {
-              sendEmoji(s);
-            }
-          } else {
-            sendEmoji(s);
-          }
+            if(currentTab==='animals'){ pickedAnimal = s; currentTab='feelings'; setTabUI(); renderEmoji(); }
+            else if(pickedAnimal){ sendEmoji(pickedAnimal + s); }
+            else { sendEmoji(s); }
+          } else { sendEmoji(s); }
         }; })(sym);
         emojiGrid.appendChild(btn);
       }
     }
-
-    function setTabUI(){
-      if(currentTab==='animals'){ tabAnimals.classList.add('active'); tabFeels.classList.remove('active'); }
-      else { tabFeels.classList.add('active'); tabAnimals.classList.remove('active'); }
-    }
+    function setTabUI(){ if(currentTab==='animals'){ tabAnimals.classList.add('active'); tabFeels.classList.remove('active'); } else { tabFeels.classList.add('active'); tabAnimals.classList.remove('active'); } }
     tabAnimals.onclick = ()=>{ currentTab='animals'; setTabUI(); renderEmoji(); };
     tabFeels.onclick = ()=>{ currentTab='feelings'; setTabUI(); renderEmoji(); };
     comboChk.onchange = ()=>{ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
+    // ---- 소켓/입장/전송 ----
     let socket; let myNick; let myRoom; let joined=false; let typingTimer; let joinGuard;
 
     function enableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=false; }
@@ -362,24 +378,11 @@ app.get('/', (req, res) => {
       if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); enableCreate(); return; }
       myNick = n; myRoom = r;
 
-      socket = io({
-        path: '/socket.io',
-        transports: ['websocket','polling'],
-        forceNew: true,
-        reconnection: true,
-        reconnectionAttempts: 5,
-        timeout: 10000
-      });
-
+      socket = io({ path:'/socket.io', transports:['websocket','polling'], forceNew:true, reconnection:true, reconnectionAttempts:5, timeout:10000 });
       joinGuard = setTimeout(()=>{ if(!joined){ enableCreate(); addSys('서버 응답 지연. 다시 시도하세요.'); } }, 12000);
 
-      socket.on('connect', ()=> { addSys('서버 연결됨'); });
-
-      socket.on('connect_error', (err)=>{
-        addSys('연결 실패: ' + (err && err.message ? err.message : err));
-        alert('연결 실패: ' + (err && err.message ? err.message : err));
-        enableCreate(); socket.close(); socket=null;
-      });
+      socket.on('connect', ()=> addSys('서버 연결됨'));
+      socket.on('connect_error', (err)=>{ addSys('연결 실패: ' + (err && err.message ? err.message : err)); alert('연결 실패: ' + (err && err.message ? err.message : err)); enableCreate(); socket.close(); socket=null; });
 
       socket.emit('join', { room: r, nick: n, key: k });
 
@@ -390,41 +393,19 @@ app.get('/', (req, res) => {
         setup.style.display='none'; inputbar.style.display='block';
         addSys(info.msg);
         history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
+        rescanUnread();
       });
 
-      socket.on('join_error', (err)=>{
-        clearTimeout(joinGuard);
-        addSys('입장 실패: ' + err);
-        alert('입장 실패: ' + err);
-        statusTag.textContent = '거부됨';
-        enableCreate(); socket.disconnect(); socket=null;
-      });
-
-      socket.on('disconnect', (reason)=> {
-        if (!joined) enableCreate();
-        addSys('연결이 끊어졌습니다: ' + reason);
-      });
+      socket.on('join_error', (err)=>{ clearTimeout(joinGuard); addSys('입장 실패: ' + err); alert('입장 실패: ' + err); statusTag.textContent='거부됨'; enableCreate(); socket.disconnect(); socket=null; });
+      socket.on('disconnect', (reason)=> { if(!joined) enableCreate(); addSys('연결이 끊어졌습니다: ' + reason); });
 
       socket.on('peer_joined', (name)=> addSys(name + ' 님이 입장했습니다'));
       socket.on('peer_left', (name)=> addSys(name + ' 님이 퇴장했습니다'));
 
-      // 수신한 텍스트 → 렌더 → 즉시 읽음 회신
-      socket.on('msg', ({ id, nick, text, ts }) => {
-        addMsg(false, nick, text, ts, id);
-        if (id) socket.emit('read', { room: myRoom, id: id });
-      });
+      socket.on('msg', ({ id, nick, text, ts }) => { addMsg(false, nick, text, ts, id); if (id && isAttended()) sendRead(id); });
+      socket.on('file', ({ id, nick, name, type, size, data, ts }) => { addFile(false, nick, { name, type, size, data, ts }, id); if (id && isAttended()) sendRead(id); });
 
-      // 수신한 파일 → 렌더 → 즉시 읽음 회신
-      socket.on('file', ({ id, nick, name, type, size, data, ts }) => {
-        addFile(false, nick, { name, type, size, data, ts }, id);
-        if (id) socket.emit('read', { room: myRoom, id: id });
-      });
-
-      // 읽음 알림 수신(내 메시지의 배지 제거)
-      socket.on('read', ({ id }) => {
-        if (!id) return;
-        if (!markRead(id)) pendingReads.add(id);
-      });
+      socket.on('read', ({ id }) => { if (!id) return; const row = document.querySelector('.msg.me[data-mid="'+id+'"]'); if (row){ const badge=row.querySelector('.read'); if(badge) badge.remove(); } });
 
       socket.on('typing', (name)=>{ typing.textContent = name + ' 입력 중...'; clearTimeout(typingTimer); typingTimer = setTimeout(()=> typing.textContent = '', 1200); });
       socket.on('info', (m)=> addSys(m));
@@ -436,22 +417,12 @@ app.get('/', (req, res) => {
       else if(['Shift','Alt','Control','Meta'].includes(e.key)===false && joined && window.socket) window.socket.emit('typing', myRoom);
     });
 
-    document.querySelector('#emojiBtn').onclick = () => {
-      emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none');
-    };
+    document.querySelector('#emojiBtn').onclick = () => { emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none'); };
 
     document.querySelector('#attach').onclick = () => fileInput.click();
-    fileInput.onchange = () => {
-      const files = Array.from(fileInput.files||[]);
-      files.forEach(f => sendFile(f));
-      fileInput.value = '';
-    };
+    fileInput.onchange = () => { const files = Array.from(fileInput.files||[]); files.forEach(f => sendFile(f)); fileInput.value = ''; };
 
-    document.addEventListener('paste', (e)=>{
-      if(!joined) return;
-      const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
-      items.forEach(it => { if (it.kind === 'file') { const f = it.getAsFile(); if (f) sendFile(f); } });
-    });
+    document.addEventListener('paste', (e)=>{ if(!joined) return; const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : []; items.forEach(it => { if (it.kind === 'file') { const f = it.getAsFile(); if (f) sendFile(f); } }); });
 
     function sendMsg(){
       if(!window.socket){ addSys('연결되지 않음'); return; }
@@ -464,7 +435,7 @@ app.get('/', (req, res) => {
     }
 
     const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel'];
-    const MAX_BYTES = 2_000_000; // 2MB
+    const MAX_BYTES = 2_000_000;
 
     function sendFile(file){
       if (!file) return;
@@ -479,6 +450,9 @@ app.get('/', (req, res) => {
       };
       reader.readAsDataURL(file);
     }
+
+    // 사용자가 스크롤로 메시지를 화면에 올려놓았을 때도 관찰 반응하도록
+    chatBox.addEventListener('scroll', ()=> { if (isAttended()) rescanUnread(); });
 
     // URL prefill
     const url = new URL(window.location);
@@ -554,7 +528,7 @@ io.on('connection', (socket) => {
     socket.to(room).emit('file', { id, nick, name, type, size, data, ts: now() });
   });
 
-  // 읽음 중계: 수신자가 읽음 보냈을 때 송신자에게만 전달
+  // 읽음 중계
   socket.on('read', ({ room, id }) => {
     room = sanitize(room, 40);
     id = sanitize(id, 64);
