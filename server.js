@@ -263,7 +263,7 @@ io.on('connection', (socket) => {
     }
 
     r.lastMsgs.push({ t: now(), from: socket.id });
-    io.to(room).emit('msg', { nick, text, ts: now() });
+    socket.to(room).emit('msg', { nick, text, ts: now() });
   });
 
   socket.on('typing', (room) => {
