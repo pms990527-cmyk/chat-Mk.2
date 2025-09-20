@@ -78,6 +78,7 @@ app.get('/', (req, res) => {
     .top .right{display:flex;gap:6px;align-items:center}
     .tag{font-size:12px;color:#0b1220;background:#a5f3fc;border-radius:999px;padding:2px 8px}
     .small{font-size:12px;color:var(--muted)}
+    .time{font-size:11px;color:#94a3b8;margin-left:6px}
   </style>
 </head>
 <body>
@@ -145,19 +146,29 @@ app.get('/', (req, res) => {
 
     function addSys(msg){
       const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight; }
-    function addMsg(fromMe, name, text){
-      const row = document.createElement('div'); row.className = 'msg ' + (fromMe?'me':'them');
-      const b = document.createElement('div'); b.className='bubble'; b.innerHTML = '<strong>'+name+':</strong> ' + text;
+
+    // 시간 포맷터 추가
+    function fmt(ts){ const d=new Date(ts); return d.toLocaleTimeString('ko-KR',{hour:'2-digit', minute:'2-digit'}); }
+
+    // 메시지 렌더러 교체(시간 포함)
+    function addMsg(fromMe, name, text, ts){
+      const row = document.createElement('div');
+      row.className = 'msg ' + (fromMe?'me':'them');
+      const b = document.createElement('div'); b.className='bubble';
+      b.innerHTML = `<strong>${name}</strong><span class="time">${fmt(ts||Date.now())}</span> ` + text;
       row.appendChild(b); chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
     }
 
     let socket; let myNick; let myRoom; let joined = false; let typingTimer;
 
     $('#create').onclick = () => {
+      if (socket) return;                 // 중복 연결 방지
+      $('#create').disabled = true;       // 중복 클릭 방지
+
       const r = roomInput.value.trim();
       const n = nickInput.value.trim();
       const k = keyInput.value.trim();
-      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); return; }
+      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); $('#create').disabled = false; return; }
       myNick = n; myRoom = r;
       socket = io();
       socket.emit('join', { room: r, nick: n, key: k });
@@ -173,14 +184,15 @@ app.get('/', (req, res) => {
       socket.on('join_error', (err)=>{
         addSys('입장 실패: ' + err);
         statusTag.textContent = '거부됨'; statusTag.style.background = '#fca5a5';
-        socket.disconnect();
+        $('#create').disabled = false;   // 재시도 허용
+        socket.disconnect(); socket = null; // 새 연결 허용
       });
 
       socket.on('peer_joined', (name)=> addSys(name + ' 님이 입장했습니다'));
       socket.on('peer_left', (name)=> addSys(name + ' 님이 퇴장했습니다'));
 
       socket.on('msg', ({ nick, text, ts }) => {
-        addMsg(false, nick, text);
+        addMsg(false, nick, text, ts);
       });
 
       socket.on('typing', (name)=>{
@@ -202,7 +214,7 @@ app.get('/', (req, res) => {
       const input = $('#text');
       const val = input.value.trim(); if(!val) return;
       socket.emit('msg', { room: myRoom, text: val });
-      addMsg(true, myNick, val);
+      addMsg(true, myNick, val, Date.now()); // 내 화면에도 즉시 표시
       input.value = '';
     }
 
@@ -263,7 +275,7 @@ io.on('connection', (socket) => {
     }
 
     r.lastMsgs.push({ t: now(), from: socket.id });
-    socket.to(room).emit('msg', { nick, text, ts: now() });
+    socket.to(room).emit('msg', { nick, text, ts: now() }); // 상대에게만 방송
   });
 
   socket.on('typing', (room) => {
