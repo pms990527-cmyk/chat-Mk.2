@@ -1,10 +1,10 @@
 /**
  * Cloud Cat 1:1 Chat — Node.js + Socket.IO
  * - 테마/첨부/읽음표시/타이핑 유지
- * - 이모티콘: 클릭하면 즉시 전송 X → 입력창(#text)에 삽입만, 전송 버튼 누르면 발송
- * - 이미지: 클릭 시 라이트박스 팝업으로 크게 보기
- * - 닉네임: 아바타 옆, 말풍선 위에 작게 표시(상대 메시지에만 표시)
- * - 읽음 표시(현실적): 상대 탭 visible + 창 focus + 메시지가 뷰포트에 충분히 보일 때만 read
+ * - 이모티콘: 클릭 → 입력창 삽입, 전송 버튼/엔터로 발송
+ * - 이미지: 클릭 시 라이트박스 확대
+ * - 닉네임: 아바타 옆, 말풍선 위에 작게
+ * - Enter 즉시 전송(IME 조합 중일 땐 전송 방지)
  */
 const express = require('express');
 const http = require('http');
@@ -38,7 +38,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = 'v-2025-09-21-emoji-insert-lightbox';
+const APP_VERSION = 'v-2025-09-21-enter-send';
 
 app.get('/healthz', (_, res) => res.status(200).type('text/plain').send('ok'));
 
@@ -147,7 +147,7 @@ app.get('/', (req, res) => {
     }
     .typing-flag .who{font-weight:600; color:#0284c7}
     .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#94a3b8;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
-    .typing-flag .dots i:nth-child(2){animation-delay:.15s}
+    .typing--flag .dots i:nth-child(2){animation-delay:.15s}
     .typing-flag .dots i:nth-child(3){animation-delay:.3s}
     @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
 
@@ -233,10 +233,7 @@ app.get('/', (req, res) => {
     const viewer = $('#viewer');
     const viewerImg = $('#viewerImg');
     const viewerClose = $('#viewerClose');
-    function openViewer(src, alt){
-      viewerImg.src = src; viewerImg.alt = alt || '';
-      viewer.classList.add('active');
-    }
+    function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.classList.add('active'); }
     function closeViewer(){ viewer.classList.remove('active'); viewerImg.src=''; }
     viewer.addEventListener('click', (e)=>{ if(e.target===viewer) closeViewer(); });
     viewerClose.addEventListener('click', closeViewer);
@@ -328,9 +325,7 @@ app.get('/', (req, res) => {
     function hideTyping(){ typingFlag.style.display = 'none'; }
 
     // 메시지 렌더
-    function makeStack(){
-      const s = document.createElement('div'); s.className = 'stack'; return s;
-    }
+    function makeStack(){ const s = document.createElement('div'); s.className = 'stack'; return s; }
     function addMsg(fromMe, name, text, ts, id){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(id) row.setAttribute('data-mid', id);
@@ -458,7 +453,9 @@ app.get('/', (req, res) => {
     comboChk.onchange = ()=>{ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
+    // 소켓/입장/전송/타이핑
     let socket; let myNick; let myRoom; let joined=false; let typingTimerSend; let typingActive=false; let lastTypingSent=0; let joinGuard;
+    let composing = false; // IME 한글 조합 중 여부
 
     function enableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=false; }
     function disableCreate(){ const b=document.querySelector('#create'); if(b) b.disabled=true; }
@@ -500,13 +497,26 @@ app.get('/', (req, res) => {
 
       socket.on('read', ({ id }) => { if (!id) return; const row = document.querySelector('.msg.me[data-mid="'+id+'"]'); if (row){ const badge=row.querySelector('.read'); if(badge) badge.remove(); } });
 
-      // 타이핑 표시 수신
       socket.on('typing', ({ nick, state }) => { if (state){ showTyping(nick || '상대'); } else { hideTyping(); } });
     };
 
-    // 입력/전송/타이핑
+    // 전송 버튼
     $('#send').onclick = sendMsg;
-    textInput.addEventListener('keydown', handleTyping);
+
+    // 타이핑 + 엔터 전송
+    textInput.addEventListener('compositionstart', ()=> { composing = true; });
+    textInput.addEventListener('compositionend', ()=> { composing = false; });
+    textInput.addEventListener('keydown', (e)=>{
+      // IME 조합 중에는 엔터 무시
+      if ((e.key === 'Enter' || e.key === 'NumpadEnter') && !e.shiftKey) {
+        if (!composing) {
+          e.preventDefault();
+          sendMsg();
+          return;
+        }
+      }
+      handleTyping();
+    });
     textInput.addEventListener('input', handleTyping);
     textInput.addEventListener('blur', ()=>{ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } });
 
