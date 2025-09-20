@@ -153,9 +153,12 @@ app.get('/', (req, res) => {
     // 메시지 렌더러 교체(시간 포함)
     function addMsg(fromMe, name, text, ts){
       const row = document.createElement('div');
-      row.className = 'msg ' + (fromMe?'me':'them');
+      row.className = 'msg ' + (fromMe ? 'me' : 'them');
       const b = document.createElement('div'); b.className='bubble';
-      b.innerHTML = `<strong>${name}</strong><span class="time">${fmt(ts||Date.now())}</span> ` + text;
+      // 템플릿 리터럴(백틱) 대신 문자열 연결로 작성하여 서버 템플릿 안에서 구문 오류 방지
+      b.innerHTML = '<strong>' + name + '</strong><span class="time">' + fmt(ts || Date.now()) + '</span> ' + text;
+      row.appendChild(b); chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
+    }</strong><span class="time">${fmt(ts||Date.now())}</span> ` + text;
       row.appendChild(b); chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
     }
 
