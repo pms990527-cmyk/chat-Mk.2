@@ -1,6 +1,7 @@
 /**
  * Mini 1:1 Chat — single-file Node.js + Socket.IO app
- * Fixed: nested backticks 제거. HTML 템플릿 내부는 문자열 연결만 사용.
+ * UI: KakaoTalk-like styling (yellow my-bubbles, white others, header bar, sticky input)
+ * Note: No nested backticks in client JS inside the server template string.
  */
 const express = require('express');
 const http = require('http');
@@ -13,7 +14,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 1e6
 });
 
-// In-memory rooms
+// ---- In-memory rooms ----
 const rooms = new Map();
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
@@ -33,7 +34,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = "v-2025-09-21-03";
+const APP_VERSION = "v-2025-09-21-04";
 
 app.get('/', (req, res) => {
   const { room = '', nick = '' } = req.query;
@@ -45,169 +46,192 @@ app.get('/', (req, res) => {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>1:1 Private Chat</title>
   <style>
-    :root { --bg:#0f172a; --card:#111827; --muted:#94a3b8; --text:#e5e7eb; --accent:#22d3ee; }
-    *{box-sizing:border-box} body{margin:0;font-family:system-ui, -apple-system, Segoe UI, Roboto, Noto Sans KR, Arial;background:linear-gradient(120deg,#0b1020,#111827);color:var(--text)}
-    .wrap{max-width:820px;margin:24px auto;padding:16px}
-    .card{background:rgba(17,24,39,.8);backdrop-filter:blur(6px);border:1px solid rgba(148,163,184,.15);border-radius:16px;padding:16px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
-    h1{margin:0 0 6px;font-size:20px;font-weight:700}
-    .muted{color:var(--muted);font-size:14px}
-    label{display:block;margin:10px 0 6px}
-    input,button{font:inherit}
-    input[type=text],input[type=password]{width:100%;padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.25);background:#0b1220;color:#e5e7eb}
-    button{cursor:pointer;border:1px solid rgba(148,163,184,.25);background:#0b1220;color:#e5e7eb;border-radius:12px;padding:10px 14px}
-    button.primary{background:var(--accent);border-color:transparent;color:#0b1220;font-weight:700}
-    .row{display:flex;gap:8px}
-    .chat{height:380px;overflow:auto;border:1px solid rgba(148,163,184,.2);border-radius:12px;padding:12px;background:#0b1220}
-    .msg{margin:8px 0;display:flex;gap:8px;align-items:flex-end}
-    .bubble{max-width:70%;padding:10px 12px;border-radius:14px;border:1px solid rgba(148,163,184,.2)}
-    .me{justify-content:flex-end}
-    .me .bubble{background:#111827}
-    .them .bubble{background:#0d1528}
-    .sys{color:#94a3b8;text-align:center;font-size:13px;margin:8px 0}
-    .typing{font-size:12px;color:var(--muted);margin-top:4px;height:16px}
-    .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
-    .top .right{display:flex;gap:6px;align-items:center}
-    .tag{font-size:12px;color:#0b1220;background:#a5f3fc;border-radius:999px;padding:2px 8px}
-    .small{font-size:12px;color:var(--muted)}
-    .time{font-size:11px;color:#94a3b8;margin-left:6px}
+    :root{ --kakao-yellow:#FEE500; --kakao-bg:#EDEDED; --ink:#111827; --muted:#8B95A1; --bubble:#fff; --me:#111; --them:#111; --header-h:56px; }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Noto Sans KR,Arial;background:var(--kakao-bg);color:#111}
+    .wrap{max-width:680px;margin:0 auto;padding:0 0 12px;min-height:100%;}
+    .card{display:flex;flex-direction:column;min-height:100vh;background:#fff;box-shadow:0 6px 30px rgba(0,0,0,.06)}
+
+    /* Header (app bar) */
+    .appbar{height:var(--header-h);display:flex;align-items:center;gap:10px;padding:0 14px;background:var(--kakao-yellow);border-bottom:1px solid rgba(0,0,0,.08);position:sticky;top:0;z-index:10}
+    .appbar .title{font-weight:700}
+    .appbar .room{font-size:12px;color:#333}
+
+    /* Chat area */
+    .chat{flex:1;overflow:auto;background:var(--kakao-bg);padding:12px 12px 90px 12px}
+    .sys{color:#6b7280;text-align:center;font-size:12px;margin:10px 0}
+
+    /* Message row */
+    .msg{display:flex;gap:8px;margin:6px 0;align-items:flex-end}
+    .msg.me{justify-content:flex-end}
+    .avatar{width:32px;height:32px;border-radius:50%;background:#d9d9d9;color:#222;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px}
+    .msg.me .avatar{display:none}
+
+    /* Bubble */
+    .bubble{max-width:75%;padding:8px 10px;border-radius:14px;line-height:1.35;position:relative;word-break:break-word}
+    .name{font-size:12px;color:#666;margin-bottom:2px}
+    .meta{font-size:11px;color:#888;margin-top:4px;text-align:right}
+
+    /* Others = white bubble */
+    .them .bubble{background:var(--bubble);border:1px solid #e5e7eb}
+    .them .bubble:after{content:"";position:absolute;left:-6px;bottom:8px;border:6px solid transparent;border-right-color:#e5e7eb}
+    .them .bubble:before{content:"";position:absolute;left:-5px;bottom:8px;border:6px solid transparent;border-right-color:#fff}
+
+    /* Me = yellow bubble */
+    .me .bubble{background:var(--kakao-yellow);color:#000}
+    .me .bubble:after{content:"";position:absolute;right:-6px;bottom:8px;border:6px solid transparent;border-left-color:#c9b200}
+    .me .bubble:before{content:"";position:absolute;right:-5px;bottom:8px;border:6px solid transparent;border-left-color:var(--kakao-yellow)}
+
+    /* Input bar */
+    .inputbar{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:680px;background:#fff;border-top:1px solid #eee;padding:10px;display:flex;gap:8px}
+    .inputbar input[type=text]{flex:1;padding:12px 12px;border:1px solid #e5e7eb;border-radius:20px;font:inherit}
+    .inputbar button{padding:0 16px;height:40px;border:none;border-radius:20px;background:var(--kakao-yellow);font-weight:700;color:#111;cursor:pointer}
+
+    .small{font-size:12px;color:#6b7280}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <div class="top">
-        <div>
-          <h1>1:1 Private Chat</h1>
-          <div class="small">Invite link: <span id="invite"></span></div>
-          <div class="small">Version: ${APP_VERSION}</div>
-        </div>
-        <div class="right"><span class="tag" id="status">대기</span></div>
-      </div>
-
-      <div id="setup">
-        <label>대화방 코드 (영문/숫자)</label>
-        <input id="room" type="text" placeholder="예: myroom123" value="${room}" />
-
-        <label style="margin-top:12px">닉네임</label>
-        <input id="nick" type="text" placeholder="예: 민성" value="${nick}" />
-
-        <label style="margin-top:12px">방 키 (선택, 비밀번호)</label>
-        <input id="key" type="password" placeholder="처음 입장한 사람이 키를 설정하면, 두 번째도 동일 키 필요" />
-
-        <div class="row" style="margin-top:12px">
-          <button id="create" class="primary">입장</button>
-          <button id="makeLink">초대 링크 만들기</button>
-        </div>
-        <div class="typing" id="hint">최대 2명만 입장할 수 있어요.</div>
-      </div>
-
-      <div id="chatUI" style="display:none">
-        <div class="chat" id="chat"></div>
-        <div class="typing" id="typing"></div>
-        <div class="row" style="margin-top:8px">
-          <input id="text" type="text" placeholder="메시지 입력" />
-          <button id="send" class="primary">전송</button>
+      <div class="appbar">
+        <div style="display:flex;flex-direction:column">
+          <span class="title">1:1 채팅</span>
+          <span class="room">방: <span id="roomLabel"></span> · <span class="small">v ${APP_VERSION}</span></span>
         </div>
       </div>
+
+      <div class="chat" id="chat"></div>
+
+      <div class="inputbar" id="inputbar" style="display:none">
+        <input id="text" type="text" placeholder="메시지 입력" />
+        <button id="send">전송</button>
+      </div>
+
+      <div id="setup" style="padding:12px 12px 100px 12px;background:var(--kakao-bg)">
+        <div style="background:#fff;border:1px solid #eee;border-radius:12px;padding:12px">
+          <label>대화방 코드</label>
+          <input id="room" type="text" placeholder="예: myroom123" value="${room}" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px" />
+
+          <label style="margin-top:10px">닉네임</label>
+          <input id="nick" type="text" placeholder="예: 민성" value="${nick}" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px" />
+
+          <label style="margin-top:10px">방 키 (선택)</label>
+          <input id="key" type="password" placeholder="비밀번호" style="width:100%;padding:10px;border:1px solid #e5e7eb;border-radius:10px" />
+
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button id="create" style="flex:0 0 auto;padding:10px 14px;border:none;border-radius:10px;background:var(--kakao-yellow);font-weight:700;cursor:pointer">입장</button>
+            <button id="makeLink" style="flex:0 0 auto;padding:10px 14px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;cursor:pointer">초대 링크</button>
+          </div>
+          <div class="small" style="margin-top:8px">Invite link: <span id="invite"></span></div>
+          <div class="small" id="typing" style="min-height:16px;margin-top:6px"></div>
+          <div class="small" id="status" style="margin-top:6px">대기</div>
+        </div>
+      </div>
+
     </div>
   </div>
 
   <script src="/socket.io/socket.io.js?v=${APP_VERSION}"></script>
   <script>
     const $ = (s)=>document.querySelector(s);
+    const chatBox = $('#chat');
+    const setup = $('#setup');
+    const inputbar = $('#inputbar');
+
     const roomInput = $('#room');
     const nickInput = $('#nick');
     const keyInput = $('#key');
     const invite = $('#invite');
+    const roomLabel = $('#roomLabel');
     const statusTag = $('#status');
-    const chatBox = $('#chat');
-    const chatUI = $('#chatUI');
     const typing = $('#typing');
 
     function setInviteLink(r){
       const url = new URL(window.location);
       url.searchParams.set('room', r);
       invite.textContent = url.toString();
+      roomLabel.textContent = r || '-';
     }
 
-    document.querySelector('#makeLink').onclick = () => {
+    $('#makeLink').onclick = () => {
       const r = roomInput.value.trim();
       if(!r){ alert('방 코드를 입력하세요'); return; }
       setInviteLink(r);
     };
 
     function addSys(msg){
-      const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
-    }
+      const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight; }
 
-    // 시간 포맷터
-    function fmt(ts){ const d=new Date(ts); return d.toLocaleTimeString('ko-KR',{hour:'2-digit', minute:'2-digit'}); }
+    function fmt(ts){ const d=new Date(ts); return d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
+    function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+    function initial(n){ n=(n||'').trim(); return n? n[0].toUpperCase(): '?'; }
 
-    // 메시지 렌더러 (문자열 연결, 백틱 금지)
+    // Kakao-like renderer
     function addMsg(fromMe, name, text, ts){
-      const row = document.createElement('div');
-      row.className = 'msg ' + (fromMe ? 'me' : 'them');
+      const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
+      if(!fromMe){
+        const av = document.createElement('div'); av.className='avatar'; av.textContent = initial(name); row.appendChild(av);
+      }
       const b = document.createElement('div'); b.className='bubble';
-      b.innerHTML = '<strong>' + name + '</strong><span class="time">' + fmt(ts || Date.now()) + '</span> ' + text;
-      row.appendChild(b); chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
+      const nameHtml = fromMe? '' : '<div class="name">' + esc(name) + '</div>';
+      const textHtml = '<div class="text">' + esc(text) + '</div>';
+      const metaHtml = '<div class="meta">' + fmt(ts||Date.now()) + '</div>';
+      b.innerHTML = nameHtml + textHtml + metaHtml;
+      row.appendChild(b);
+      chatBox.appendChild(row);
+      chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    let socket; let myNick; let myRoom; let joined = false; let typingTimer;
+    let socket; let myNick; let myRoom; let joined=false; let typingTimer;
 
-    document.querySelector('#create').onclick = () => {
-      if (socket) return;                 // 중복 연결 방지
-      document.querySelector('#create').disabled = true; // 중복 클릭 방지
-
+    $('#create').onclick = () => {
+      if (socket) return; $('#create').disabled = true;
       const r = roomInput.value.trim();
       const n = nickInput.value.trim();
       const k = keyInput.value.trim();
-      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); document.querySelector('#create').disabled = false; return; }
-      myNick = n; myRoom = r;
+      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); $('#create').disabled = false; return; }
+      myNick = n; myRoom = r; roomLabel.textContent = r;
       socket = io();
       socket.emit('join', { room: r, nick: n, key: k });
 
       socket.on('joined', (info)=>{
-        joined = true; statusTag.textContent = '연결됨'; statusTag.style.background = '#86efac';
+        joined = true; statusTag.textContent = '연결됨';
         setInviteLink(myRoom);
-        document.querySelector('#setup').style.display='none'; chatUI.style.display='block';
+        setup.style.display='none'; inputbar.style.display='flex';
         addSys(info.msg);
         history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
       });
 
       socket.on('join_error', (err)=>{
         addSys('입장 실패: ' + err);
-        statusTag.textContent = '거부됨'; statusTag.style.background = '#fca5a5';
-        document.querySelector('#create').disabled = false;   // 재시도 허용
-        socket.disconnect(); socket = null; // 새 연결 허용
+        statusTag.textContent = '거부됨';
+        $('#create').disabled = false; socket.disconnect(); socket=null;
       });
 
       socket.on('peer_joined', (name)=> addSys(name + ' 님이 입장했습니다'));
       socket.on('peer_left', (name)=> addSys(name + ' 님이 퇴장했습니다'));
 
-      socket.on('msg', ({ nick, text, ts }) => {
-        addMsg(false, nick, text, ts);
-      });
+      socket.on('msg', ({ nick, text, ts }) => { addMsg(false, nick, text, ts); });
 
       socket.on('typing', (name)=>{
         typing.textContent = name + ' 입력 중...';
-        clearTimeout(typingTimer);
-        typingTimer = setTimeout(()=> typing.textContent = '', 1200);
+        clearTimeout(typingTimer); typingTimer = setTimeout(()=> typing.textContent = '', 1200);
       });
 
       socket.on('info', (m)=> addSys(m));
     };
 
-    document.querySelector('#send').onclick = sendMsg;
-    document.querySelector('#text').addEventListener('keydown', (e)=>{
+    $('#send').onclick = sendMsg;
+    $('#text').addEventListener('keydown', (e)=>{
       if(e.key==='Enter') sendMsg();
       else if(['Shift','Alt','Control','Meta'].includes(e.key)===false && joined) socket.emit('typing', myRoom);
     });
 
     function sendMsg(){
-      const input = document.querySelector('#text');
-      const val = input.value.trim(); if(!val) return;
+      const input = $('#text'); const val = input.value.trim(); if(!val) return;
       socket.emit('msg', { room: myRoom, text: val });
-      addMsg(true, myNick, val, Date.now()); // 내 화면에도 즉시 표시
+      addMsg(true, myNick, val, Date.now());
       input.value = '';
     }
 
@@ -268,7 +292,7 @@ io.on('connection', (socket) => {
     }
 
     r.lastMsgs.push({ t: now(), from: socket.id });
-    socket.to(room).emit('msg', { nick, text, ts: now() }); // 상대에게만 방송
+    socket.to(room).emit('msg', { nick, text, ts: now() });
   });
 
   socket.on('typing', (room) => {
