@@ -106,6 +106,12 @@ app.get('/', (req, res) => {
     /* Emoji picker */
     .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:8px 10px;max-height:220px;overflow:auto;border-top:1px solid rgba(14,165,233,.18);background:var(--sky-50)}
     .emoji button{font-size:20px;background:transparent;border:none;cursor:pointer}
+      /* time badge outside bubbles */
+    .time{font-size:10px;color:#94a3b8;align-self:flex-end;min-width:34px;text-align:center;opacity:.9}
+    .msg.me .time{margin-right:6px}
+    .msg.them .time{margin-left:6px}
+    /* ensure no white outline on text */
+    .bubble .text{-webkit-text-stroke:0;text-shadow:none}
   </style>
 </head>
 <body>
@@ -192,20 +198,19 @@ app.get('/', (req, res) => {
     function addSys(msg){
       const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
     }
-    function fmt(ts){ const d=new Date(ts); return d.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}); }
+    function fmt(ts){ const d=new Date(ts); const h=String(d.getHours()).padStart(2,'0'); const m=String(d.getMinutes()).padStart(2,'0'); return h+':'+m; }); }
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function initial(n){ n=(n||'').trim(); return n? n[0].toUpperCase(): '?'; }
 
     function addMsg(fromMe, name, text, ts){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
       if(!fromMe){ const av = document.createElement('div'); av.className='avatar'; av.textContent = initial(name); row.appendChild(av); }
+      if(fromMe){ const t = document.createElement('span'); t.className='time'; t.textContent = fmt(ts||Date.now()); row.appendChild(t); }
       const b = document.createElement('div'); b.className='bubble';
-      const textHtml = '<div class="text">' + esc(text) + '</div>';
-      const metaHtml = '<div class="meta">' + fmt(ts||Date.now()) + '</div>';
-      b.innerHTML = textHtml + metaHtml;
+      b.innerHTML = '<div class="text">' + esc(text) + '</div>';
       row.appendChild(b);
-      chatBox.appendChild(row);
-      chatBox.scrollTop = chatBox.scrollHeight;
+      if(!fromMe){ const t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(ts||Date.now()); row.appendChild(t2); }
+      chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
     }
 
     // Emoji picker
