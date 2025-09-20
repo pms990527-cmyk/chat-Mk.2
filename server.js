@@ -1,12 +1,8 @@
 /**
  * Mini 1:1 Chat — Node.js + Socket.IO
- * UI: Cloud Cat theme + attachments + animal-emote picker (100 combos)
- * Fixes:
- *  - No text outline: force remove with !important
- *  - Emoji click sends immediately (needs window.socket/myRoom/myNick set on joined)
- *  - Time badges outside bubbles: mine left, theirs right (HH:MM)
- * Notes:
- *  - No nested backticks inside client JS; safe to embed in server template string.
+ * UI: Cloud Cat theme (inspired by the user's CloudCatChat.tsx)
+ * - Sky gradient, cloud header, white vs sky bubbles, emoji picker, sticky input bar
+ * - No nested backticks in client JS (safe for server template string)
  */
 const express = require('express');
 const http = require('http');
@@ -16,7 +12,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  maxHttpBufferSize: 8_000_000
+  maxHttpBufferSize: 1e6
 });
 
 // ---- In-memory rooms ----
@@ -39,7 +35,7 @@ function isThrottled(room, socketId, limit = 8, windowMs = 10_000) {
   return count >= limit;
 }
 
-const APP_VERSION = "v-2025-09-21-07";
+const APP_VERSION = "v-2025-09-21-05";
 
 app.get('/', (req, res) => {
   const { room = '', nick = '' } = req.query;
@@ -53,7 +49,7 @@ app.get('/', (req, res) => {
   <style>
     :root{
       --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc; --sky-400:#38bdf8;
-      --sky-500:#0ea5e9; --ink:#0f172a; --muted:#64748b; --white:#ffffff;
+      --sky-500:#0ea5e9; --ink:#0f172a; --muted:#64748b; --white:#ffffff; --bg:#e6f1fb;
       --header-h:58px;
     }
     *{box-sizing:border-box}
@@ -66,9 +62,9 @@ app.get('/', (req, res) => {
     .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(255,255,255,.9);border-bottom:1px solid rgba(14,165,233,.18)}
     .brand{display:flex;gap:10px;align-items:center}
     .cat{width:36px;height:36px;border-radius:999px;background:var(--sky-200);display:flex;align-items:center;justify-content:center}
-    .title{font-weight:800;color:#0284c7}
+    .title{font-weight:800;color:var(--sky-600, #0284c7)}
     .subtitle{font-size:12px;color:var(--muted);font-family:ui-serif, Georgia, serif}
-    .status{display:flex;gap:6px;align-items:center;color:#0284c7;font-size:12px;font-family:ui-serif, Georgia, serif}
+    .status{display:flex;gap:6px;align-items:center;color:var(--sky-600,#0284c7);font-size:12px;font-family:ui-serif, Georgia, serif}
 
     /* Chat area */
     .chat{flex:1;overflow:auto;background:linear-gradient(180deg,var(--sky-50),var(--white));padding:14px 14px 110px 14px}
@@ -83,22 +79,13 @@ app.get('/', (req, res) => {
     .msg.me .avatar{display:none}
 
     .bubble{max-width:76%;padding:10px 12px;border-radius:18px;line-height:1.45;word-break:break-word}
+    .meta{font-size:10px;margin-top:4px;font-family:ui-serif, Georgia, serif}
+
     .them .bubble{background:var(--white);border:1px solid var(--sky-200);color:#075985}
+    .them .meta{color:#38bdf8}
+
     .me .bubble{background:var(--sky-400);color:#fff;box-shadow:0 4px 18px rgba(56,189,248,.35)}
-
-    /* external time badges (left/right of bubbles) */
-    .time{font-size:10px;color:#94a3b8;align-self:flex-end;min-width:34px;text-align:center;opacity:.9}
-    .msg.me .time{margin-right:6px}
-    .msg.them .time{margin-left:6px}
-
-    /* kill any white outline/shadow on text, hard override */
-    .bubble, .bubble * { -webkit-text-stroke: 0 !important; text-shadow: none !important; }
-
-    /* attachments */
-    .bubble img{display:block;max-width:280px;height:auto;border-radius:12px}
-    .att{margin-top:6px;font-size:12px}
-    .att a{color:#0ea5e9;text-decoration:none;word-break:break-all}
-    .att .size{color:#64748b;margin-left:6px}
+    .me .meta{color:#dbeafe}
 
     /* Input area */
     .inputbar{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:720px;background:rgba(255,255,255,.92);backdrop-filter:blur(6px);border-top:1px solid rgba(14,165,233,.18);padding:10px}
@@ -106,7 +93,6 @@ app.get('/', (req, res) => {
     .text{flex:1;border:1px solid var(--sky-200);border-radius:14px;padding:12px 12px;font:inherit}
     .btn{height:40px;padding:0 14px;border:none;border-radius:12px;font-weight:700;cursor:pointer}
     .btn-emoji{background:var(--sky-200);color:#0c4a6e}
-    .btn-attach{background:#e2e8f0;color:#0f172a}
     .btn-send{background:var(--sky-400);color:#fff}
 
     /* Setup panel */
@@ -118,9 +104,14 @@ app.get('/', (req, res) => {
     .link{font-size:12px;color:#0ea5e9}
 
     /* Emoji picker */
-    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:8px 10px;max-height:240px;overflow:auto;border-top:1px solid rgba(14,165,233,.18);background:var(--sky-50)}
-    .emoji button{font-size:20px;background:transparent;border:1px solid rgba(2,6,23,.06);border-radius:8px;cursor:pointer;padding:6px}
-    .emoji button:hover{background:#fff}
+    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:8px 10px;max-height:220px;overflow:auto;border-top:1px solid rgba(14,165,233,.18);background:var(--sky-50)}
+    .emoji button{font-size:20px;background:transparent;border:none;cursor:pointer}
+      /* time badge outside bubbles */
+    .time{font-size:10px;color:#94a3b8;align-self:flex-end;min-width:34px;text-align:center;opacity:.9}
+    .msg.me .time{margin-right:6px}
+    .msg.them .time{margin-left:6px}
+    /* ensure no white outline on text (hard override) */
+    .bubble, .bubble * { -webkit-text-stroke:0 !important; text-shadow:none !important; -webkit-font-smoothing:antialiased !important; -moz-osx-font-smoothing:grayscale !important; mix-blend-mode:normal !important; }
   </style>
 </head>
 <body>
@@ -131,7 +122,7 @@ app.get('/', (req, res) => {
           <div class="cat">🐱</div>
           <div>
             <div class="title">Cloud Cat Chat</div>
-            <div class="subtitle">구름 위를 걷는 고양이 테마 · v ${APP_VERSION}</div>
+            <div class="subtitle">구름 위를 걷는 고양이 테마</div>
           </div>
         </div>
         <div class="status"><span>☁️</span><span id="online">offline</span></div>
@@ -146,12 +137,10 @@ app.get('/', (req, res) => {
       <div class="inputbar" id="inputbar" style="display:none">
         <div class="inputrow">
           <input id="text" class="text" type="text" placeholder="구름 속 고양이에게 말을 걸어보세요..." />
-          <input id="file" type="file" style="display:none" accept="image/*,.pdf,.txt,.zip,.doc,.docx,.ppt,.pptx,.xls,.xlsx"/>
-          <button id="attach" class="btn btn-attach" type="button">📎</button>
           <button id="emojiBtn" class="btn btn-emoji" type="button">😊</button>
           <button id="send" class="btn btn-send" type="button">야옹!</button>
         </div>
-        <div class="subtitle" style="margin-top:4px">Enter 전송 · 2MB 이하 첨부 지원</div>
+        <div class="subtitle" style="margin-top:4px">Enter를 눌러 전송</div>
       </div>
 
       <div id="setup" class="setup">
@@ -193,7 +182,6 @@ app.get('/', (req, res) => {
     const statusTag = $('#status');
     const typing = $('#typing');
     const online = $('#online');
-    const fileInput = $('#file');
 
     function setInviteLink(r){
       const url = new URL(window.location);
@@ -210,10 +198,9 @@ app.get('/', (req, res) => {
     function addSys(msg){
       const d = document.createElement('div'); d.className='sys'; d.textContent = msg; chatBox.appendChild(d); chatBox.scrollTop = chatBox.scrollHeight;
     }
-    function fmt(ts){ const d=new Date(ts); const h=String(d.getHours()).padStart(2,'0'); const m=String(d.getMinutes()).padStart(2,'0'); return h+':'+m; }
+    function fmt(ts){ const d=new Date(ts); const h=String(d.getHours()).padStart(2,'0'); const m=String(d.getMinutes()).padStart(2,'0'); return h+':'+m; }); }
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function initial(n){ n=(n||'').trim(); return n? n[0].toUpperCase(): '?'; }
-    function humanSize(b){ if(b<1024) return b+' B'; if(b<1024*1024) return (b/1024).toFixed(1)+' KB'; return (b/1024/1024).toFixed(2)+' MB'; }
 
     function addMsg(fromMe, name, text, ts){
       const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
@@ -226,28 +213,7 @@ app.get('/', (req, res) => {
       chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    function addFile(fromMe, name, file){
-      const row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
-      if(!fromMe){ const av = document.createElement('div'); av.className='avatar'; av.textContent = initial(name); row.appendChild(av); }
-      if(fromMe){ const t = document.createElement('span'); t.className='time'; t.textContent = fmt(file.ts||Date.now()); row.appendChild(t); }
-      const b = document.createElement('div'); b.className='bubble';
-      if ((file.type||'').startsWith('image/')) {
-        const img = document.createElement('img'); img.src = file.data; img.alt = file.name || 'image';
-        b.appendChild(img);
-        const meta = document.createElement('div'); meta.className='att';
-        meta.innerHTML = '<a href="' + file.data + '" download="' + esc(file.name||'image') + '">이미지 저장</a><span class="size">' + humanSize(file.size||0) + '</span>';
-        b.appendChild(meta);
-      } else {
-        const meta = document.createElement('div'); meta.className='att';
-        meta.innerHTML = '파일: <a href="' + file.data + '" download="' + esc(file.name||'file') + '">' + esc(file.name||'file') + '</a><span class="size">' + humanSize(file.size||0) + '</span>';
-        b.appendChild(meta);
-      }
-      row.appendChild(b);
-      if(!fromMe){ const t2 = document.createElement('span'); t2.className='time'; t2.textContent = fmt(file.ts||Date.now()); row.appendChild(t2); }
-      chatBox.appendChild(row); chatBox.scrollTop = chatBox.scrollHeight;
-    }
-
-    // Animal-emote picker (100 combos, click-to-send)
+    // Emoji picker
     const animalEmojis = [
       '🐶❤️','🐶😂','🐶🥺','🐶😡','🐶😎','🐶😱','🐶😘','🐶🤩','🐶😴','🐶😭',
       '🐱❤️','🐱😂','🐱🥺','🐱😡','🐱😎','🐱😱','🐱😘','🐱🤩','🐱😴','🐱😭',
@@ -281,23 +247,18 @@ app.get('/', (req, res) => {
 
     let socket; let myNick; let myRoom; let joined=false; let typingTimer;
 
-    document.querySelector('#create').onclick = () => {
-      if (socket) return; document.querySelector('#create').disabled = true;
+    $('#create').onclick = () => {
+      if (socket) return; $('#create').disabled = true;
       const r = roomInput.value.trim();
       const n = nickInput.value.trim();
       const k = keyInput.value.trim();
-      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); document.querySelector('#create').disabled = false; return; }
+      if(!r || !n){ alert('방 코드와 닉네임을 입력하세요'); $('#create').disabled = false; return; }
       myNick = n; myRoom = r;
       socket = io();
       socket.emit('join', { room: r, nick: n, key: k });
 
       socket.on('joined', (info)=>{
         joined = true; online.textContent = 'online';
-        // expose for emoji click-to-send
-        window.socket = socket;
-        window.myRoom = myRoom;
-        window.myNick = myNick;
-
         setInviteLink(myRoom);
         setup.style.display='none'; inputbar.style.display='block';
         addSys(info.msg);
@@ -306,19 +267,14 @@ app.get('/', (req, res) => {
 
       socket.on('join_error', (err)=>{
         addSys('입장 실패: ' + err);
-        alert('입장 실패: ' + err);
         statusTag.textContent = '거부됨';
-        document.querySelector('#create').disabled = false;
-        socket.disconnect(); socket=null;
+        $('#create').disabled = false; socket.disconnect(); socket=null;
       });
 
       socket.on('peer_joined', (name)=> addSys(name + ' 님이 입장했습니다'));
       socket.on('peer_left', (name)=> addSys(name + ' 님이 퇴장했습니다'));
 
       socket.on('msg', ({ nick, text, ts }) => { addMsg(false, nick, text, ts); });
-      socket.on('file', ({ nick, name, type, size, data, ts }) => {
-        addFile(false, nick, { name, type, size, data, ts });
-      });
 
       socket.on('typing', (name)=>{
         typing.textContent = name + ' 입력 중...';
@@ -335,28 +291,10 @@ app.get('/', (req, res) => {
     });
 
     document.querySelector('#emojiBtn').onclick = () => {
-      emojiWrap.style.display = (emojiWrap.style.display === 'none' ? 'grid' : 'none');
+      const s = emojiWrap.style.display === 'none' ? 'grid' : 'none';
+      emojiWrap.style.display = s;
+      if (s === 'grid') document.querySelector('#text').focus();
     };
-
-    // attach button + file input
-    document.querySelector('#attach').onclick = () => fileInput.click();
-    fileInput.onchange = () => {
-      const files = Array.from(fileInput.files||[]);
-      files.forEach(f => sendFile(f));
-      fileInput.value = '';
-    };
-
-    // paste to send image/file
-    document.addEventListener('paste', (e)=>{
-      if(!joined) return;
-      const items = e.clipboardData && e.clipboardData.items ? Array.from(e.clipboardData.items) : [];
-      items.forEach(it => {
-        if (it.kind === 'file') {
-          const f = it.getAsFile();
-          if (f) sendFile(f);
-        }
-      });
-    });
 
     function sendMsg(){
       const input = document.querySelector('#text');
@@ -364,22 +302,6 @@ app.get('/', (req, res) => {
       socket.emit('msg', { room: myRoom, text: val });
       addMsg(true, myNick, val, Date.now());
       input.value = '';
-    }
-
-    const ALLOWED_TYPES = ['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel'];
-    const MAX_BYTES = 2_000_000; // 2MB
-
-    function sendFile(file){
-      if (!file) return;
-      if (file.size > MAX_BYTES) { addSys('파일이 너무 큽니다(최대 2MB).'); return; }
-      if (!ALLOWED_TYPES.includes(file.type) && !file.type.startsWith('image/')) { addSys('허용되지 않은 파일 형식입니다.'); return; }
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result;
-        addFile(true, myNick, { name: file.name, type: file.type, size: file.size, data: dataUrl, ts: Date.now() });
-        socket.emit('file', { room: myRoom, name: file.name, type: file.type, size: file.size, data: dataUrl });
-      };
-      reader.readAsDataURL(file);
     }
 
     // Prefill from URL
@@ -440,28 +362,6 @@ io.on('connection', (socket) => {
 
     r.lastMsgs.push({ t: now(), from: socket.id });
     socket.to(room).emit('msg', { nick, text, ts: now() });
-  });
-
-  // file relay (no storage)
-  const ALLOWED_TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel']);
-  const MAX_BYTES = 2_000_000; // 2MB
-  const MAX_DATAURL = 7_000_000; // guard rail
-
-  socket.on('file', ({ room, name, type, size, data }) => {
-    room = sanitize(room, 40);
-    const r = rooms.get(room);
-    if (!r) return;
-    const nick = sanitize(socket.data.nick, 24) || '게스트';
-    name = sanitize(name, 140);
-    type = sanitize(type, 100);
-    size = Number(size) || 0;
-
-    if (size > MAX_BYTES) return socket.emit('info', '파일이 너무 큽니다(최대 2MB).');
-    if (!(ALLOWED_TYPES.has(type) || (type||'').startsWith('image/'))) return socket.emit('info', '허용되지 않은 파일 형식입니다.');
-    if (typeof data !== 'string' || data.slice(0,5) !== 'data:' || data.length > MAX_DATAURL) return socket.emit('info', '파일 데이터가 올바르지 않습니다.');
-    if (isThrottled(r, socket.id, 5, 15_000)) return socket.emit('info', '전송이 너무 빠릅니다. 잠시 후 다시 시도하세요.');
-
-    socket.to(room).emit('file', { nick, name, type, size, data, ts: now() });
   });
 
   socket.on('typing', (room) => {
