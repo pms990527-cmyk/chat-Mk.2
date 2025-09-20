@@ -1,10 +1,9 @@
 /**
- * Cloud Cat 1:1 Chat — No Bubbles Edition
- * - 말풍선 완전 제거(텍스트만, 배경/테두리 없음)
- * - 전체 구름 테마 유지, 기능 동일
- *   · 1:1, 방키, 스팸 제한
- *   · 읽음표시(1), 타이핑 표시, 이모지(입력창 삽입), 이미지 라이트박스, 파일 전송
- *   · Enter 전송, 자동 스크롤, 유휴 끊김 방지(ping + 앱 keep-alive)
+ * Cloud Cat 1:1 Chat — No Bubbles + Soft Text Backgrounds
+ * - 말풍선은 여전히 없음(테두리 0). 텍스트 뒤에만 파스텔 배경 채움.
+ * - 내 메시지: 하늘색 파스텔, 상대: 흰색. 대비는 충분히 확보.
+ * - 기능 그대로: 1:1, 방키, 읽음(1), 타이핑, 이모지(입력창 삽입), 이미지 라이트박스, 파일 전송,
+ *   Enter 전송, 자동 스크롤, 끊김 방지(ping + 앱 keep-alive)
  */
 const express = require('express');
 const http = require('http');
@@ -25,7 +24,7 @@ const io = new Server(server, {
   maxHttpBufferSize: 8_000_000
 });
 
-const APP_VERSION = 'v-2025-09-21-cloudcat-no-bubbles';
+const APP_VERSION = 'v-2025-09-21-cloudcat-no-bubbles-bgtext';
 
 const rooms = new Map();
 function getRoom(roomId) {
@@ -60,7 +59,10 @@ app.get('/', (req, res) => {
     --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc; --sky-400:#38bdf8; --sky-500:#0ea5e9;
     --ink:#0f172a; --muted:#64748b; --white:#ffffff; --header-h:58px;
     --card-bg:rgba(255,255,255,.86); --border:rgba(14,165,233,.18);
-    --meText:#0b2a3a; --themText:#0f172a;
+    --meText:#083344;             /* 내 메시지 글자색: 진한 딥블루 */
+    --themText:#0f172a;           /* 상대 글자색 */
+    --meBg:#dff3ff;               /* 내 메시지 배경 파스텔 */
+    --themBg:#ffffff;             /* 상대 메시지 배경 */
   }
   *{box-sizing:border-box}
   html,body{height:100%}
@@ -99,7 +101,7 @@ app.get('/', (req, res) => {
   .divider .line{height:1px;background:rgba(14,165,233,.35);flex:1}
   .divider .txt{font-size:12px;color:#0ea5e9;font-family:ui-serif, Georgia, serif}
 
-  /* Message row: no bubbles */
+  /* Message row (no bubbles) */
   .msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
   .msg.me{justify-content:flex-end}
   .avatar{width:32px;height:32px;border-radius:50%;background:var(--sky-200);display:flex;align-items:center;justify-content:center;font-size:18px}
@@ -111,18 +113,27 @@ app.get('/', (req, res) => {
   .name{font-size:11px;color:#64748b;margin:0 0 2px 4px}
   .msg.me .name{display:none}
 
-  /* 텍스트만, 배경/테두리 없음 */
+  /* 텍스트만: 배경 채우고 살짝 둥글게. 테두리는 없음 */
+  .content{display:flex;flex-direction:column;gap:4px}
   .text{
+    display:inline-block;
+    background:var(--themBg);
     color:var(--themText);
     line-height:1.24;
     word-break:break-word;
-    padding:0; margin:0;
+    padding:6px 10px;
+    border-radius:12px;
+    box-shadow:0 2px 8px rgba(2,6,23,.06);
   }
-  .msg.me .text{ color:var(--meText); }
+  .msg.me .text{
+    background:var(--meBg);
+    color:var(--meText);
+    box-shadow:0 4px 12px rgba(2,132,199,.18);
+  }
 
-  /* 이미지/첨부는 보이도록 적당한 그림자만 */
+  /* 이미지/첨부는 기존처럼 */
   .content img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:zoom-in;box-shadow:0 12px 28px rgba(8,12,26,.18)}
-  .att{margin-top:4px;font-size:12px}
+  .att{font-size:12px}
   .att a{color:#0ea5e9;text-decoration:none;word-break:break-all}
   .att .size{color:#64748b;margin-left:6px}
 
@@ -333,7 +344,7 @@ app.get('/', (req, res) => {
   }
   function hideTyping(){ typingFlag.style.display = 'none'; }
 
-  // Message renderers (no bubbles)
+  // Message renderers
   function makeStack(){ var s = document.createElement('div'); s.className = 'stack'; return s; }
   function addMsg(fromMe, name, text, ts, id){
     var row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
