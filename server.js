@@ -1,10 +1,10 @@
 /**
- * Cloud Cat Chat — No-Bubble + Keep-Alive
- * - 로그인 없이 방/닉네임
- * - 1:1, 초대링크 ?room=, 선택 키(비번)
- * - 읽음표시(1), 타이핑 표시, 이모지(입력창 삽입), 파일 전송, 이미지 라이트박스
- * - 말풍선 제거(No-Bubble), 자동 스크롤, Enter 전송
- * - 유휴 끊김 방지(socket.io 핑 튜닝 + 앱 레벨 keep-alive)
+ * Cloud Cat 1:1 Chat — Full Theme + QoL
+ * - 전체 구름 테마(배경/헤더/입력창/버튼/메시지) 적용
+ * - 말풍선: 세로 패딩 절반, 라인 높이 축소, 파란 말풍선 텍스트 할로 제거
+ * - 1:1, 초대링크 ?room=, 선택 키(비번), 스팸 제한
+ * - 읽음표시(1), 타이핑 표시, 이모지(입력창 삽입), 이미지 라이트박스, 파일 전송
+ * - Enter 전송, 자동 스크롤 고정, 유휴 끊김 방지(socket.io ping 튜닝 + 앱 keep-alive)
  */
 const express = require('express');
 const http = require('http');
@@ -13,21 +13,21 @@ const { Server } = require('socket.io');
 const app = express();
 const server = http.createServer(app);
 
-// 일부 프록시는 타임아웃이 짧다. 안전빵으로 여유를 준다.
+// 프록시 타임아웃 가드
 server.headersTimeout = 65_000;
 server.keepAliveTimeout = 61_000;
 
 const io = new Server(server, {
   cors: { origin: '*' },
   serveClient: true,
-  pingInterval: 10_000,   // 10s 마다 ping
-  pingTimeout: 180_000,   // 3분까지 기다림
+  pingInterval: 10_000,   // 기본 핑을 자주
+  pingTimeout: 180_000,   // 끊김 판정 느슨하게
   maxHttpBufferSize: 8_000_000
 });
 
-const APP_VERSION = 'v-2025-09-21-cloud-cat-no-bubble-ka';
-const rooms = new Map();
+const APP_VERSION = 'v-2025-09-21-cloudcat-full';
 
+const rooms = new Map();
 function getRoom(roomId) {
   if (!rooms.has(roomId)) rooms.set(roomId, { key: null, users: new Set(), lastMsgs: [] });
   return rooms.get(roomId);
@@ -57,14 +57,10 @@ app.get('/', (req, res) => {
   <title>Cloud Cat Chat</title>
   <style>
     :root{
-      /* CloudCat 컬러 */
-      --sky-top:#0a1640; --sky-mid:#0f2b66; --sky-bot:#12386e;
-      --cloud-1:rgba(255,255,255,.08); --cloud-2:rgba(200,225,255,.10);
-      --ink:#e6f0ff; --muted:#9fb4d6;
-      --them-text:#f2f6ff; --me-text:#d6f0ff;
-      --header-h:58px;
-      --card-bg:rgba(8,14,34,.74);
-      --border:rgba(157,178,241,.18);
+      --sky-50:#f0f9ff; --sky-100:#e0f2fe; --sky-200:#bae6fd; --sky-300:#7dd3fc; --sky-400:#38bdf8; --sky-500:#0ea5e9;
+      --ink:#0f172a; --muted:#64748b; --white:#ffffff; --header-h:58px;
+      --card-bg:rgba(255,255,255,.86); --border:rgba(14,165,233,.18);
+      --meText:#eaf6ff; --themText:#0f172a;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
@@ -72,117 +68,132 @@ app.get('/', (req, res) => {
       margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans KR",Arial;
       color:var(--ink);
       background:
-        radial-gradient(1000px 600px at 15% -10%, var(--cloud-1), transparent 60%),
-        radial-gradient(900px 600px at 80% 0%, var(--cloud-2), transparent 55%),
-        radial-gradient(1200px 700px at 50% 120%, rgba(180,210,255,.08), transparent 60%),
-        linear-gradient(180deg,var(--sky-top),var(--sky-mid) 40%, var(--sky-bot));
+        radial-gradient(900px 500px at 15% -10%, rgba(255,255,255,.40), transparent 60%),
+        radial-gradient(900px 600px at 85% 0%, rgba(186,230,253,.35), transparent 55%),
+        radial-gradient(1200px 700px at 50% 120%, rgba(125,211,252,.20), transparent 60%),
+        linear-gradient(180deg,var(--sky-100),var(--white));
       -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale;
     }
-    .wrap{max-width:760px;margin:0 auto;min-height:100%;padding:0 12px}
+    .wrap{max-width:740px;margin:0 auto;min-height:100%;padding:0 12px}
     .card{
       height:100dvh; height:100svh;
       background:var(--card-bg);
-      backdrop-filter:blur(10px) saturate(112%);
+      backdrop-filter:blur(8px) saturate(110%);
       border:1px solid var(--border);
-      border-radius:24px; box-shadow:0 18px 60px rgba(6,10,26,.55), inset 0 0 0 1px rgba(255,255,255,.02);
+      border-radius:24px;
+      box-shadow:0 16px 50px rgba(2,6,23,.08), inset 0 0 0 1px rgba(255,255,255,.04);
       overflow:hidden; display:flex; flex-direction:column;
     }
-    .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;border-bottom:1px solid var(--border)}
+
+    /* App Bar */
+    .appbar{height:var(--header-h);display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:rgba(255,255,255,.92);border-bottom:1px solid var(--border)}
     .brand{display:flex;gap:10px;align-items:center}
-    .cat{width:36px;height:36px;border-radius:999px;background:linear-gradient(180deg,#60a5fa,#a78bfa);display:flex;align-items:center;justify-content:center;box-shadow:0 0 24px rgba(96,165,250,.35)}
-    .title{font-weight:800;color:#c7d2fe}
-    .subtitle{font-size:12px;color:var(--muted)}
-    .status{font-size:12px;color:#8be0ff}
+    .cat{width:36px;height:36px;border-radius:999px;background:var(--sky-200);display:flex;align-items:center;justify-content:center;box-shadow:0 0 18px rgba(56,189,248,.35)}
+    .title{font-weight:800;color:#0284c7}
+    .subtitle{font-size:12px;color:#64748b;font-family:ui-serif, Georgia, serif}
+    .status{display:flex;gap:6px;align-items:center;color:#0284c7;font-size:12px}
 
-    .chat{flex:1;min-height:0;overflow:auto;background:
-      linear-gradient(180deg, rgba(99,179,237,.08), rgba(167,139,250,.06) 40%, transparent 80%);
-      padding:14px 14px 110px 14px}
+    /* Chat area */
+    .chat{flex:1;min-height:0;overflow:auto;background:linear-gradient(180deg,var(--sky-50),var(--white));padding:14px 14px 110px 14px}
     .divider{display:flex;align-items:center;gap:8px;margin:8px 0}
-    .divider .line{height:1px;background:var(--border);flex:1}
-    .divider .txt{font-size:12px;color:#a7c5ff;font-family:ui-serif, Georgia, serif}
+    .divider .line{height:1px;background:rgba(14,165,233,.35);flex:1}
+    .divider .txt{font-size:12px;color:#0ea5e9;font-family:ui-serif, Georgia, serif}
 
-    /* ===== 메시지 레이아웃 (No-Bubble) ===== */
-    .msg{display:flex;gap:10px;margin:10px 0;align-items:flex-end}
+    /* Message row */
+    .msg{display:flex;gap:8px;margin:8px 0;align-items:flex-end}
     .msg.me{justify-content:flex-end}
-    .avatar{width:32px;height:32px;border-radius:50%;background:linear-gradient(180deg,#60a5fa,#a78bfa);display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 6px 20px rgba(96,165,250,.28)}
+    .avatar{width:32px;height:32px;border-radius:50%;background:var(--sky-200);display:flex;align-items:center;justify-content:center;font-size:18px}
     .msg.me .avatar{display:none}
 
-    .stack{display:flex;flex-direction:column;max-width:60%}
-    @media (max-width:480px){ .stack{max-width:80%} }
+    /* Stack constraints */
+    .stack{display:flex;flex-direction:column;max-width:42%}
+    @media (max-width:480px){ .stack{max-width:62%} }
 
-    .name{font-size:11px;opacity:.9;color:#bed3ff;margin:0 0 2px 6px}
+    .name{font-size:11px;color:#64748b;margin:0 0 2px 4px}
     .msg.me .name{display:none}
 
-    .time{font-size:10px;color:rgba(220,235,255,.8);align-self:flex-end;min-width:32px;text-align:center}
+    /* Bubble with half vertical padding and tighter line-height */
+    .bubble{
+      padding:4px 10px;       /* 세로 절반 */
+      border-radius:18px;
+      line-height:1.23;       /* 촘촘 */
+      word-break:break-word;
+      background-clip:padding-box;
+      position:relative;
+      border:0; outline:none;
+      box-shadow:0 6px 16px rgba(2,6,23,.08);
+    }
+    .them .bubble{
+      background:#ffffff; color:var(--themText);
+    }
+    .me .bubble{
+      background:linear-gradient(180deg,#22b8ff,#0ea5e9); color:var(--meText);
+      box-shadow:0 10px 24px rgba(2,132,199,.25);
+    }
+
+    /* Kill white halo on blue bubble text (WebKit and others) */
+    .bubble .text{
+      -webkit-text-stroke:0 !important;
+      text-shadow:none !important;
+      -webkit-font-smoothing:antialiased !important;
+      text-rendering:optimizeLegibility;
+      -webkit-text-fill-color:currentColor;
+    }
+    .me .bubble .text{ color:var(--meText); -webkit-text-fill-color:var(--meText); }
+
+    .bubble img{display:block;max-width:320px;height:auto;border-radius:12px;cursor:pointer}
+
+    /* Time + read badge */
+    .time{font-size:10px;color:#94a3b8;align-self:flex-end;min-width:34px;text-align:center;opacity:.9}
     .msg.me .time{margin-right:6px}
     .msg.them .time{margin-left:6px}
-    .read{font-size:10px;color:rgba(220,235,255,.8);align-self:flex-end;margin-left:6px}
+    .read{font-size:10px;color:#94a3b8;align-self:flex-end;margin-left:6px;opacity:.95}
 
-    .bubble{position:relative}
-    .bubble .text{
-      -webkit-font-smoothing:antialiased;
-      -webkit-text-fill-color:currentColor;
-      text-rendering:optimizeLegibility;
-      word-break:break-word;
-      line-height:1.24;
-    }
-    .me .bubble .text{ color:var(--me-text) }
-    .them .bubble .text{ color:var(--them-text) }
+    .att{margin-top:4px;font-size:12px}
+    .att a{color:#0ea5e9;text-decoration:none;word-break:break-all}
+    .att .size{color:#64748b;margin-left:6px}
 
-    .bubble img{
-      display:block;max-width:320px;height:auto;border-radius:12px;cursor:zoom-in;
-      box-shadow:0 12px 28px rgba(8,12,26,.28)
-    }
-
-    /* ===== 입력줄 ===== */
-    .inputbar{
-      position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:760px;
-      background:rgba(6,12,26,.78);backdrop-filter:blur(10px) saturate(112%);
-      border-top:1px solid var(--border);padding:10px
-    }
+    /* Input bar */
+    .inputbar{position:fixed;left:0;right:0;bottom:0;margin:0 auto;max-width:740px;background:rgba(255,255,255,.94);backdrop-filter:blur(8px);border-top:1px solid var(--border);padding:10px}
     .inputrow{display:flex;gap:8px;align-items:center}
-    .text{flex:1;border:1px solid var(--border);background:rgba(255,255,255,.06);color:#e5f0ff;border-radius:14px;padding:12px 12px;font:inherit}
+    .text{flex:1;border:1px solid var(--sky-200);border-radius:14px;padding:12px 12px;font:inherit}
     .btn{height:40px;padding:0 14px;border:none;border-radius:12px;font-weight:700;cursor:pointer}
-    .btn-emoji{background:linear-gradient(180deg,#e879f9,#a78bfa);color:#111c3a}
-    .btn-attach{background:#223154;color:#dbeafe}
-    .btn-send{background:linear-gradient(180deg,#22d3ee,#60a5fa);color:#071226}
+    .btn-emoji{background:var(--sky-200);color:#0c4a6e}
+    .btn-attach{background:#e2e8f0;color:#0f172a}
+    .btn-send{background:var(--sky-400);color:#fff}
 
-    /* ===== 설정 패널 ===== */
-    .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg, rgba(167,139,250,.08), rgba(34,211,238,.06))}
-    .panel{background:rgba(6,12,26,.74);border:1px solid var(--border);border-radius:16px;padding:14px}
-    .label{display:block;margin:10px 0 6px;color:#d9e6ff}
-    .field{width:100%;padding:10px;border:1px solid var(--border);border-radius:10px;font:inherit;background:rgba(255,255,255,.06);color:#e5e7eb}
+    /* Setup panel */
+    .setup{padding:14px 14px 120px 14px;background:linear-gradient(180deg,var(--sky-50),var(--white))}
+    .panel{background:#fff;border:1px solid var(--border);border-radius:16px;padding:14px}
+    .label{display:block;margin:10px 0 6px}
+    .field{width:100%;padding:10px;border:1px solid var(--sky-200);border-radius:10px;font:inherit}
     .row{display:flex;gap:8px;margin-top:12px}
-    .link{font-size:12px;color:#a7c5ff}
+    .link{font-size:12px;color:#0ea5e9}
 
-    /* ===== 이모지 패널 ===== */
-    .emoji-panel{
-      position:fixed;left:0;right:0;bottom:60px;margin:0 auto;max-width:760px;
-      background:rgba(6,12,26,.9);border:1px solid var(--border);border-bottom:none;border-radius:14px 14px 0 0;
-      box-shadow:0 -8px 30px rgba(6,10,26,.55); color:#e5e7eb;
-    }
-    .emoji-tabs{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);background:rgba(10,18,36,.9);border-radius:14px 14px 0 0}
-    .emoji-tabs button{padding:6px 10px;border:1px solid rgba(167,139,250,.25);background:rgba(255,255,255,.06);color:#dbeafe;border-radius:8px;cursor:pointer}
-    .emoji-tabs button.active{background:rgba(167,139,250,.25);border-color:#a78bfa;color:#fff}
-    .emoji-tabs .combo{margin-left:auto;font-size:12px;color:#cbd5e1}
-    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:10px;max-height:240px;overflow:auto;background:rgba(11,18,36,.6)}
-    .emoji button{font-size:20px;background:transparent;border:1px solid rgba(167,139,250,.18);border-radius:8px;cursor:pointer;padding:6px;color:#fff}
-    .emoji button:hover{background:rgba(167,139,250,.18)}
+    /* Emoji panel */
+    .emoji-panel{position:fixed;left:0;right:0;bottom:60px;margin:0 auto;max-width:740px;background:var(--sky-50);border:1px solid var(--border);border-bottom:none;border-radius:14px 14px 0 0;box-shadow:0 -6px 24px rgba(2,6,23,.06);}
+    .emoji-tabs{display:flex;gap:8px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border);background:#fff;border-radius:14px 14px 0 0}
+    .emoji-tabs button{padding:6px 10px;border:1px solid rgba(2,6,23,.08);background:#f8fafc;border-radius:8px;cursor:pointer}
+    .emoji-tabs button.active{background:#fff;border-color:#0284c7;color:#0284c7}
+    .emoji-tabs .combo{margin-left:auto;font-size:12px;color:#64748b}
+    .emoji{display:grid;grid-template-columns:repeat(10,1fr);gap:8px;padding:10px;max-height:240px;overflow:auto;background:var(--sky-50)}
+    .emoji button{font-size:20px;background:transparent;border:1px solid rgba(2,6,23,.06);border-radius:8px;cursor:pointer;padding:6px}
+    .emoji button:hover{background:#fff}
 
-    /* ===== 타이핑 플래그 ===== */
-    .typing-flag{
-      position:sticky; bottom:8px; left:0;
-      display:none; align-items:center; gap:8px;
-      background:rgba(8,12,26,.9);
-      border:1px solid var(--border);
-      padding:6px 10px; border-radius:12px; color:#e5e7eb;
-      font-size:12px; box-shadow:0 8px 24px rgba(2,6,23,.5); max-width:70%;
-    }
-    .typing-flag .who{font-weight:600; color:#a7c5ff}
-    .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#93a4c3;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
+    /* Typing flag */
+    .typing-flag{position:sticky;bottom:8px;left:0;display:none;align-items:center;gap:8px;background:#fff;border:1px solid rgba(14,165,233,.22);padding:6px 10px;border-radius:12px;color:#0f172a;font-size:12px;box-shadow:0 8px 24px rgba(2,6,23,.08);max-width:70%}
+    .typing-flag .who{font-weight:600;color:#0284c7}
+    .typing-flag .dots i{display:inline-block;width:4px;height:4px;background:#94a3b8;border-radius:50%;margin-left:3px;animation:dotBlink 1.2s infinite}
     .typing-flag .dots i:nth-child(2){animation-delay:.15s}
     .typing-flag .dots i:nth-child(3){animation-delay:.3s}
     @keyframes dotBlink{0%{opacity:.2}20%{opacity:1}100%{opacity:.2}}
+
+    /* Lightbox */
+    .viewer{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.7);z-index:50}
+    .viewer.active{display:flex}
+    .viewer .box{max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000}
+    .viewer img{max-width:92vw;max-height:92vh;display:block}
+    .viewer .close{position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer}
   </style>
 </head>
 <body>
@@ -193,23 +204,23 @@ app.get('/', (req, res) => {
           <div class="cat">🐱</div>
           <div>
             <div class="title">Cloud Cat Chat</div>
-            <div class="subtitle">구름위를 걷는 고양이 · ${APP_VERSION}</div>
+            <div class="subtitle">구름 위를 걷는 고양이 · ${APP_VERSION}</div>
           </div>
         </div>
-        <div class="status" id="online">offline</div>
+        <div class="status"><span>☁️</span><span id="online">offline</span></div>
       </div>
 
       <div class="chat" id="chat">
         <div class="divider"><div class="line"></div><div class="txt">오늘</div><div class="line"></div></div>
       </div>
 
-      <!-- 라이트박스 -->
-      <div id="viewer" role="dialog" aria-modal="true" style="display:none;align-items:center;justify-content:center;background:rgba(1,3,10,.86);position:fixed;inset:0;z-index:50">
-        <div id="viewerClose" title="닫기" style="position:absolute;top:16px;right:20px;font-size:26px;color:#e5e7eb;cursor:pointer">✕</div>
-        <div class="box" style="max-width:92vw;max-height:92vh;border-radius:12px;overflow:hidden;background:#000"><img id="viewerImg" alt="" style="max-width:92vw;max-height:92vh;display:block"></div>
+      <!-- Lightbox -->
+      <div id="viewer" class="viewer" role="dialog" aria-modal="true">
+        <div class="close" id="viewerClose" title="닫기">✕</div>
+        <div class="box"><img id="viewerImg" alt=""></div>
       </div>
 
-      <!-- 이모지 패널 -->
+      <!-- Emoji panel -->
       <div id="emojiPanel" class="emoji-panel" style="display:none">
         <div class="emoji-tabs">
           <button id="tabAnimals" class="active" type="button">동물</button>
@@ -219,19 +230,19 @@ app.get('/', (req, res) => {
         <div id="emojiGrid" class="emoji"></div>
       </div>
 
-      <!-- 입력줄 -->
+      <!-- Input bar -->
       <div class="inputbar" id="inputbar" style="display:none">
         <div class="inputrow">
-          <input id="text" class="text" type="text" placeholder="메시지를 입력하세요" />
+          <input id="text" class="text" type="text" placeholder="구름 속 고양이에게 말을 걸어보세요..." />
           <input id="file" type="file" style="display:none" accept="image/*,.pdf,.txt,.zip,.doc,.docx,.ppt,.pptx,.xls,.xlsx"/>
           <button id="attach" class="btn btn-attach" type="button">📎</button>
           <button id="emojiBtn" class="btn btn-emoji" type="button">😊</button>
-          <button id="send" class="btn btn-send" type="button">보내기</button>
+          <button id="send" class="btn btn-send" type="button">야옹!</button>
         </div>
         <div class="subtitle" style="margin-top:4px">Enter 전송 · 2MB 이하 첨부 지원</div>
       </div>
 
-      <!-- 초기 설정 -->
+      <!-- Setup -->
       <div id="setup" class="setup">
         <div class="panel">
           <label class="label">대화방 코드</label>
@@ -258,19 +269,19 @@ app.get('/', (req, res) => {
     var setup = $('#setup');
     var inputbar = $('#inputbar');
 
-    // 라이트박스
-    var viewer = $('#viewer'); var viewerImg = $('#viewerImg'); var viewerClose = $('#viewerClose');
-    function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.style.display='flex'; }
-    function closeViewer(){ viewer.style.display='none'; viewerImg.src=''; }
+    // Lightbox
+    var viewer = $('#viewer'), viewerImg = $('#viewerImg'), viewerClose = $('#viewerClose');
+    function openViewer(src, alt){ viewerImg.src = src; viewerImg.alt = alt || ''; viewer.classList.add('active'); }
+    function closeViewer(){ viewer.classList.remove('active'); viewerImg.src=''; }
     viewer.addEventListener('click', function(e){ if(e.target===viewer) closeViewer(); });
     viewerClose.addEventListener('click', closeViewer);
     window.addEventListener('keydown', function(e){ if(e.key==='Escape') closeViewer(); });
 
-    // 이모지
+    // Emoji panel
     var emojiPanel = $('#emojiPanel'), emojiGrid = $('#emojiGrid');
     var tabAnimals = $('#tabAnimals'), tabFeels = $('#tabFeels'), comboChk = $('#comboMode');
 
-    // 입력/상태
+    // Inputs
     var roomInput = $('#room'), nickInput = $('#nick'), keyInput = $('#key');
     var invite = $('#invite'), statusTag = $('#status'), online = $('#online');
     var fileInput = $('#file'), textInput = $('#text');
@@ -293,7 +304,7 @@ app.get('/', (req, res) => {
     function esc(s){ return (s||'').toString().replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
     function genId(){ return 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 
-    // 읽음 처리
+    // Focus/visibility for read logic
     var hasFocus = document.hasFocus();
     var visible = document.visibilityState === 'visible';
     function isAttended(){ return hasFocus && visible; }
@@ -328,7 +339,7 @@ app.get('/', (req, res) => {
       });
     }
 
-    // 타이핑 플래그
+    // Typing flag
     var typingFlag = document.createElement('div');
     typingFlag.className = 'typing-flag';
     typingFlag.innerHTML = '<span class="who"></span> 입력 중 <span class="dots"><i></i><i></i><i></i></span>';
@@ -343,7 +354,7 @@ app.get('/', (req, res) => {
     }
     function hideTyping(){ typingFlag.style.display = 'none'; }
 
-    // 메시지 렌더러
+    // Message renderers
     function makeStack(){ var s = document.createElement('div'); s.className = 'stack'; return s; }
     function addMsg(fromMe, name, text, ts, id){
       var row = document.createElement('div'); row.className = 'msg ' + (fromMe? 'me':'them');
@@ -422,7 +433,7 @@ app.get('/', (req, res) => {
       if(!fromMe && id){ observer.observe(row); if(isAttended()) rescanUnread(); }
     }
 
-    // 이모지 데이터/삽입
+    // Emoji data & insertion
     var animals = ['🐶','🐱','🐭','🐹','🐰','🦊','🐻','🐼','🐨','🐯','🦁','🐮','🐷','🐸','🐵','🐔','🐧','🐦','🐤','🦆','🦅','🦉','🦇','🐺','🐗','🐴','🦄','🐝','🦋','🐛','🐞','🦖','🦕','🐢','🐍','🦎','🐙','🦑','🦀','🦞','🦐','🐠','🐟','🐡','🐬','🐳','🐋','🐊','🦧','🦍','🦝','🦨','🦦','🦥','🦘','🦡','🦢','🦩','🦚','🦜'];
     var feelings = ['❤️','💖','💕','✨','🔥','🎉','🥳','👍','👏','🤝','🤗','💪','🙂','😊','😂','🤣','🥹','🥺','😡','😎','😱','😘','🤩','😴','😭'];
     var currentTab = 'animals', comboMode = false, pickedAnimal = null;
@@ -461,7 +472,7 @@ app.get('/', (req, res) => {
     comboChk.onchange = function(){ comboMode = comboChk.checked; pickedAnimal = null; };
     setTabUI(); renderEmoji();
 
-    // 소켓 연결
+    // Socket
     var socket; var myNick; var myRoom; var joined=false; var typingTimerSend; var typingActive=false; var lastTypingSent=0; var joinGuard;
     var composing = false;
     var keepAliveTimer = null;
@@ -503,7 +514,7 @@ app.get('/', (req, res) => {
         history.replaceState(null, '', '?room='+encodeURIComponent(myRoom)+'&nick='+encodeURIComponent(myNick));
         rescanUnread();
 
-        // 앱 레벨 keep-alive: 10s마다 ka 전송
+        // App keep-alive
         if (keepAliveTimer) clearInterval(keepAliveTimer);
         keepAliveTimer = setInterval(function(){
           if (socket && socket.connected) socket.emit('ka', Date.now());
@@ -514,7 +525,7 @@ app.get('/', (req, res) => {
         online.textContent='offline';
         if (keepAliveTimer) { clearInterval(keepAliveTimer); keepAliveTimer = null; }
         if(!joined) enableCreate();
-        addSys('연결이 끊어졌습니다: ' + reason + ' (자동 재연결 시도)');
+        addSys('연결이 끊어졌습니다: ' + reason + ' (자동 재연결)');
       });
 
       socket.on('join_error', function(err){ clearTimeout(joinGuard); addSys('입장 실패: ' + err); alert('입장 실패: ' + err); statusTag.textContent='거부됨'; enableCreate(); socket.disconnect(); socket=null; });
@@ -529,11 +540,10 @@ app.get('/', (req, res) => {
 
       socket.on('typing', function(p){ if (p && p.state){ showTyping(p.nick || '상대'); } else { hideTyping(); } });
 
-      // 서버의 ka 응답은 무시(데이터 흐름만 유지시키면 됨)
       socket.on('ka', function(){});
     };
 
-    // 입력/전송/타이핑
+    // Input / typing / enter
     $('#send').onclick = sendMsg;
 
     textInput.addEventListener('compositionstart', function(){ composing = true; });
@@ -558,10 +568,10 @@ app.get('/', (req, res) => {
       typingTimerSend = setTimeout(function(){ if(window.socket){ window.socket.emit('typing', { room: myRoom, state: 0 }); typingActive=false; } }, 1500);
     }
 
-    // 이모지 패널
+    // Emoji toggle
     $('#emojiBtn').onclick = function(){ emojiPanel.style.display = (emojiPanel.style.display === 'none' ? 'block' : 'none'); };
 
-    // 파일 전송
+    // File send
     $('#attach').onclick = function(){ fileInput.click(); };
     fileInput.onchange = function(){ var files = Array.from(fileInput.files||[]); files.forEach(function(f){ sendFile(f); }); fileInput.value = ''; };
     document.addEventListener('paste', function(e){
@@ -599,7 +609,7 @@ app.get('/', (req, res) => {
 
     chatBox.addEventListener('scroll', function(){ if (isAttended()) rescanUnread(); });
 
-    // URL Prefill
+    // URL prefill
     var url = new URL(window.location);
     var r = url.searchParams.get('room');
     var n = url.searchParams.get('nick');
@@ -651,7 +661,7 @@ io.on('connection', (socket) => {
     socket.to(room).emit('msg', { id, nick, text, ts: now() });
   });
 
-  // 파일
+  // File relay
   const ALLOWED_TYPES = new Set(['image/png','image/jpeg','image/webp','image/gif','application/pdf','text/plain','application/zip','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/msword','application/vnd.openxmlformats-officedocument.presentationml.presentation','application/vnd.ms-powerpoint','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel']);
   const MAX_BYTES = 2_000_000;
   const MAX_DATAURL = 7_000_000;
@@ -674,7 +684,7 @@ io.on('connection', (socket) => {
     socket.to(room).emit('file', { id, nick, name, type, size, data, ts: now() });
   });
 
-  // 읽음 중계
+  // Read relay
   socket.on('read', ({ room, id }) => {
     room = sanitize(room, 40);
     id = sanitize(id, 64);
@@ -682,17 +692,15 @@ io.on('connection', (socket) => {
     socket.to(room).emit('read', { id });
   });
 
-  // 타이핑 중계
+  // Typing relay
   socket.on('typing', ({ room, state }) => {
     room = sanitize(room, 40);
     const nick = sanitize(socket.data.nick, 24) || '게스트';
     socket.to(room).emit('typing', { nick, state: !!state });
   });
 
-  // 앱 레벨 keep-alive: 클라이언트가 보낸 ka 에 즉시 응답
-  socket.on('ka', () => {
-    socket.emit('ka', Date.now());
-  });
+  // App-level keep-alive
+  socket.on('ka', () => { socket.emit('ka', Date.now()); });
 
   socket.on('disconnect', () => {
     const room = socket.data.room;
